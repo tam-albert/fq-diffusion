@@ -11,11 +11,11 @@ class TokenizerWrapper:
 
 def get_wikitext2(nsamples, seed, seqlen, tokenizer, eval_mode=False):
     if eval_mode:
-        testdata = datasets.load_dataset('./datasets/wikitext', 'wikitext-2-raw-v1', split='test')
+        testdata = datasets.load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1', split='test')
         testenc = tokenizer("\n\n".join(testdata['text']), return_tensors='pt')
         return testenc
     else:
-        traindata = datasets.load_dataset('./datasets/wikitext', 'wikitext-2-raw-v1', split='train')
+        traindata = datasets.load_dataset('Salesforce/wikitext', 'wikitext-2-raw-v1', split='train')
         traindata = traindata.filter(lambda x: len(x) > 0)
         traindata = traindata.map(lambda x : {'text': x['text'].strip()})
         trainenc = tokenizer("\n\n".join(traindata['text']), return_tensors='pt')    

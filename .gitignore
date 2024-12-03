@@ -12,3 +12,6 @@ CMakeFiles/*
 CMakeCache.txt
 *.egg
 Makefile
+modelzoo/*
+outputs/*
+third-party/*

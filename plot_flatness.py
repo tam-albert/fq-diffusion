@@ -18,12 +18,20 @@ def main():
     # get pre-quantization transformations
     flatness_flatquant = flatness.get_flatness(args, logger, transform_type="flatquant")
     flatness_hadamard = flatness.get_flatness(args, logger, transform_type="hadamard")
-    flatness_smoothquant = flatness.get_flatness(args, logger, transform_type="smoothquant")
+    flatness_smoothquant = flatness.get_flatness(
+        args, logger, transform_type="smoothquant"
+    )
     flatness_vanilla = flatness.get_flatness(args, logger, transform_type=None)
-    
+
     # plot flatness
-    flatness.plot_flatness_all_layers(args, flatness_flatquant, flatness_hadamard, flatness_smoothquant, flatness_vanilla)
+    flatness.plot_flatness_all_layers(
+        args,
+        flatness_flatquant,
+        flatness_hadamard,
+        flatness_smoothquant,
+        flatness_vanilla,
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

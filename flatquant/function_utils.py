@@ -4,6 +4,7 @@ import numpy as np
 from scipy.linalg import qr
 from collections import OrderedDict
 
+
 def get_init_scale(w_smax, x_smax, alpha=0.5):
     return (w_smax.pow(1 - alpha) / x_smax.pow(alpha)).clamp(min=1e-5)
 
@@ -13,7 +14,7 @@ def get_decompose_dim(n):
     if a * a < n:
         a += 1
     while True:
-        tmp = a*a - n
+        tmp = a * a - n
         b = int(math.sqrt(tmp))
         if b * b == tmp:
             break
@@ -28,7 +29,9 @@ def get_random_orthg(size):
     return torch.from_numpy(Q_modified)
 
 
-def get_init_weight(dim, ):
+def get_init_weight(
+    dim,
+):
     return get_random_orthg(dim)
 
 
@@ -48,7 +51,7 @@ def get_n_set_parameters_byname(model, required_names):
     return iter(params)
 
 
-def get_paras_dict_by_name(model, required_names, destination=None, prefix=''):
+def get_paras_dict_by_name(model, required_names, destination=None, prefix=""):
     if destination is None:
         destination = OrderedDict()
     for r_name in required_names:
@@ -60,7 +63,7 @@ def get_paras_dict_by_name(model, required_names, destination=None, prefix=''):
 
 def check_params_grad(model):
     for name, param in model.named_parameters():
-        print(name, ':{}'.format(param.requires_grad))
+        print(name, ":{}".format(param.requires_grad))
     return
 
 
@@ -74,7 +77,9 @@ def print_trainable_parameters(model):
         all_param += param.numel()
         if param.requires_grad:
             trainable_params += param.numel()
-    print(f"trainable params: {trainable_params} || all params: {all_param} || trainable: {100 * trainable_params / all_param:.2f}%")
+    print(
+        f"trainable params: {trainable_params} || all params: {all_param} || trainable: {100 * trainable_params / all_param:.2f}%"
+    )
 
 
 def set_require_grad_all(model, requires_grad):

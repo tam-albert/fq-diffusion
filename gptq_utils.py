@@ -12,14 +12,22 @@ torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 
 
-def find_qlayers(module, layers=[torch.nn.Linear, ], name=''):
+def find_qlayers(
+    module,
+    layers=[
+        torch.nn.Linear,
+    ],
+    name="",
+):
     if type(module) in layers:
         return {name: module}
     res = {}
     for name1, child in module.named_children():
-        res.update(find_qlayers(
-            child, layers=layers, name=name + '.' + name1 if name != '' else name1
-        ))
+        res.update(
+            find_qlayers(
+                child, layers=layers, name=name + "." + name1 if name != "" else name1
+            )
+        )
     return res
 
 
@@ -35,7 +43,7 @@ class GPTQ:
         self.nsamples = 0
 
     def add_batch(self, inp, out):
-        
+
         if len(inp.shape) == 2:
             inp = inp.unsqueeze(0)
         tmp = inp.shape[0]
@@ -50,7 +58,12 @@ class GPTQ:
         self.H += inp.matmul(inp.t())
 
     def fasterquant(
-        self, blocksize=128, percdamp=.01, groupsize=-1, actorder=False, static_groups=False
+        self,
+        blocksize=128,
+        percdamp=0.01,
+        groupsize=-1,
+        actorder=False,
+        static_groups=False,
     ):
         W = self.layer.weight.data.clone()
         W = W.float()
@@ -68,10 +81,11 @@ class GPTQ:
 
         if static_groups:
             import copy
+
             groups = []
             for i in range(0, self.columns, groupsize):
                 quantizer = copy.deepcopy(self.quantizer)
-                quantizer.find_params(W[:, i:(i + groupsize)])
+                quantizer.find_params(W[:, i : (i + groupsize)])
                 groups.append(quantizer)
 
         if actorder:
@@ -108,7 +122,9 @@ class GPTQ:
                 if groupsize != -1:
                     if not static_groups:
                         if (i1 + i) % groupsize == 0:
-                            self.quantizer.find_params(W[:, (i1 + i):(i1 + i + groupsize)])
+                            self.quantizer.find_params(
+                                W[:, (i1 + i) : (i1 + i + groupsize)]
+                            )
                     else:
                         idx = i1 + i
                         if actorder:
@@ -117,7 +133,7 @@ class GPTQ:
 
                 q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
                 Q1[:, i] = q
-                Losses1[:, i] = (w - q) ** 2 / d ** 2
+                Losses1[:, i] = (w - q) ** 2 / d**2
 
                 err1 = (w - q) / d
                 W1[:, i:] -= err1.unsqueeze(1).matmul(Hinv1[i, i:].unsqueeze(0))
@@ -133,12 +149,17 @@ class GPTQ:
         if actorder:
             Q = Q[:, invperm]
 
-        self.layer.weight.data = Q.reshape(self.layer.weight.shape).to(self.layer.weight.data.dtype)
+        self.layer.weight.data = Q.reshape(self.layer.weight.shape).to(
+            self.layer.weight.data.dtype
+        )
         if torch.any(torch.isnan(self.layer.weight.data)):
-            logging.warning('NaN in weights')
+            logging.warning("NaN in weights")
             import pprint
-            pprint.pprint(self.quantizer.bits, self.quantizer.scale, self.quantizer.zero_point)
-            raise ValueError('NaN in weights')
+
+            pprint.pprint(
+                self.quantizer.bits, self.quantizer.scale, self.quantizer.zero_point
+            )
+            raise ValueError("NaN in weights")
 
     def free(self):
         self.H = None
@@ -146,16 +167,16 @@ class GPTQ:
         self.Trace = None
         torch.cuda.empty_cache()
         cleanup_memory(verbose=False)
-        
-        
+
+
 @torch.no_grad()
 def gptq_fwrd(model, dataloader, dev, args):
-    '''
-    From GPTQ repo 
+    """
+    From GPTQ repo
     TODO: Make this function general to support both OPT and LLaMA models
-    '''
-    logging.info('-----GPTQ Quantization-----')
-    
+    """
+    logging.info("-----GPTQ Quantization-----")
+
     use_cache = model.config.use_cache
     model.config.use_cache = False
     layers = model.model.layers
@@ -170,18 +191,20 @@ def gptq_fwrd(model, dataloader, dev, args):
     inps = torch.zeros(
         (args.nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev
     )
-    cache = {'i': 0, 'attention_mask': None}
+    cache = {"i": 0, "attention_mask": None}
 
     class Catcher(nn.Module):
         def __init__(self, module):
             super().__init__()
             self.module = module
+
         def forward(self, inp, **kwargs):
-            inps[cache['i']] = inp
-            cache['i'] += 1
-            cache['attention_mask'] = kwargs['attention_mask']
-            cache['position_ids'] = kwargs['position_ids']
+            inps[cache["i"]] = inp
+            cache["i"] += 1
+            cache["attention_mask"] = kwargs["attention_mask"]
+            cache["position_ids"] = kwargs["position_ids"]
             raise ValueError
+
     layers[0] = Catcher(layers[0])
     for batch in dataloader:
         try:
@@ -196,16 +219,20 @@ def gptq_fwrd(model, dataloader, dev, args):
     torch.cuda.empty_cache()
 
     outs = torch.zeros_like(inps)
-    attention_mask = cache['attention_mask']
-    position_ids = cache['position_ids']
+    attention_mask = cache["attention_mask"]
+    position_ids = cache["position_ids"]
 
     quantizers = {}
     sequential = [
-                ['self_attn.k_proj.linear', 'self_attn.v_proj.linear', 'self_attn.q_proj.linear'],
-                ['self_attn.o_proj.linear'],
-                ['mlp.up_proj.linear', 'mlp.gate_proj.linear'],
-                ['mlp.down_proj.linear']
-            ]
+        [
+            "self_attn.k_proj.linear",
+            "self_attn.v_proj.linear",
+            "self_attn.q_proj.linear",
+        ],
+        ["self_attn.o_proj.linear"],
+        ["mlp.up_proj.linear", "mlp.gate_proj.linear"],
+        ["mlp.down_proj.linear"],
+    ]
     # sequential = [
     #             ['self_attn.k_proj', 'self_attn.v_proj', 'self_attn.q_proj'],
     #             ['self_attn.o_proj'],
@@ -213,7 +240,7 @@ def gptq_fwrd(model, dataloader, dev, args):
     #             ['mlp.down_proj']
     #         ]
     for i in range(len(layers)):
-        print(f'\nLayer {i}:', flush=True, end=' ')
+        print(f"\nLayer {i}:", flush=True, end=" ")
         layer = layers[i].to(dev)
         full = find_qlayers(layer, layers=[torch.nn.Linear])
         for names in sequential:
@@ -221,61 +248,77 @@ def gptq_fwrd(model, dataloader, dev, args):
 
             gptq = {}
             for name in subset:
-                print(f'{name}', end='  ', flush=True)
+                print(f"{name}", end="  ", flush=True)
                 layer_weight_bits = args.w_bits
-                layer_weight_sym = not(args.w_asym)
-                if 'lm_head' in name:
+                layer_weight_sym = not (args.w_asym)
+                if "lm_head" in name:
                     layer_weight_bits = 16
                     continue
                 gptq[name] = GPTQ(subset[name])
                 gptq[name].quantizer = WeightQuantizer()
                 gptq[name].quantizer.configure(
-                    layer_weight_bits, perchannel=True, sym=layer_weight_sym, mse=args.gptq_mse
+                    layer_weight_bits,
+                    perchannel=True,
+                    sym=layer_weight_sym,
+                    mse=args.gptq_mse,
                 )
 
             def add_batch(name):
                 def tmp(_, inp, out):
                     gptq[name].add_batch(inp[0].data, out.data)
+
                 return tmp
+
             handles = []
             for name in subset:
                 handles.append(subset[name].register_forward_hook(add_batch(name)))
             for j in range(args.nsamples):
-                outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
+                outs[j] = layer(
+                    inps[j].unsqueeze(0),
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                )[0]
             for h in handles:
                 h.remove()
 
             for name in subset:
                 layer_w_groupsize = args.w_groupsize
                 gptq[name].fasterquant(
-                    percdamp=args.percdamp, groupsize=layer_w_groupsize, actorder=args.act_order, static_groups=False
+                    percdamp=args.percdamp,
+                    groupsize=layer_w_groupsize,
+                    actorder=args.act_order,
+                    static_groups=False,
                 )
-                quantizers['model.layers.%d.%s' % (i, name)] = gptq[name].quantizer
+                quantizers["model.layers.%d.%s" % (i, name)] = gptq[name].quantizer
                 gptq[name].free()
 
         for j in range(args.nsamples):
-            outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
+            outs[j] = layer(
+                inps[j].unsqueeze(0),
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+            )[0]
 
         layers[i] = layer.cpu()
         del layer
-        del gptq 
+        del gptq
         torch.cuda.empty_cache()
 
         inps, outs = outs, inps
 
     model.config.use_cache = use_cache
     cleanup_memory(verbose=True)
-    logging.info('-----GPTQ Quantization Done-----\n')
+    logging.info("-----GPTQ Quantization Done-----\n")
     return quantizers
 
 
 @torch.no_grad()
 def rtn_fwrd(model, dev, args):
-    '''
-    From GPTQ repo 
+    """
+    From GPTQ repo
     TODO: Make this function general to support both OPT and LLaMA models
-    '''
-    assert args.w_groupsize ==-1, "Groupsize not supported in RTN!"
+    """
+    assert args.w_groupsize == -1, "Groupsize not supported in RTN!"
     layers = model.model.layers
     torch.cuda.empty_cache()
 
@@ -284,27 +327,29 @@ def rtn_fwrd(model, dev, args):
     for i in tqdm.tqdm(range(len(layers)), desc="(RtN Quant.) Layers"):
         layer = layers[i].to(dev)
 
-        subset = find_qlayers(layer,
-                                            layers=[torch.nn.Linear])
+        subset = find_qlayers(layer, layers=[torch.nn.Linear])
 
         for name in subset:
             layer_weight_bits = args.w_bits
-            if 'lm_head' in name:
+            if "lm_head" in name:
                 layer_weight_bits = 16
                 continue
 
             quantizer = WeightQuantizer()
             quantizer.configure(
-                layer_weight_bits, perchannel=True, sym=not(args.w_asym), mse=args.gptq_mse
+                layer_weight_bits,
+                perchannel=True,
+                sym=not (args.w_asym),
+                mse=args.gptq_mse,
             )
             W = subset[name].weight.data
             w_dtype = W.dtype
             quantizer.find_params(W)
             subset[name].weight.data = quantizer.quantize(W).to(w_dtype)
-            quantizers['model.layers.%d.%s' % (i, name)] = quantizer.cpu()
+            quantizers["model.layers.%d.%s" % (i, name)] = quantizer.cpu()
         layers[i] = layer.cpu()
         torch.cuda.empty_cache()
         del layer
-            
+
     cleanup_memory(verbose=True)
     return quantizers

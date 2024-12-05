@@ -3,16 +3,16 @@ import torch
 
 
 def get_decompose_dim(n):
-    a = int(n ** 0.5)
+    a = int(n**0.5)
     if a * a < n:
         a += 1
     while True:
         tmp = a * a - n
-        b = int(tmp ** 0.5)
+        b = int(tmp**0.5)
         if b * b == tmp:
             break
         a += 1
-    return a - b, a + b 
+    return a - b, a + b
 
 
 class OnlineTrans(torch.nn.Module):
@@ -23,7 +23,9 @@ class OnlineTrans(torch.nn.Module):
         self.decompose = decompose
         self.trans_dim = trans_dim
         if trans == "had":
-            had_rem_dim, self.rem_dim = deploy.functional.online_trans.get_hadK(trans_dim)
+            had_rem_dim, self.rem_dim = deploy.functional.online_trans.get_hadK(
+                trans_dim
+            )
             if had_rem_dim is not None:
                 self.register_buffer("had_rem_dim", had_rem_dim)
                 if not self.fp32_trans:
@@ -34,7 +36,9 @@ class OnlineTrans(torch.nn.Module):
             if decompose:
                 left_size, right_size = get_decompose_dim(trans_dim)
                 left_matrix = torch.randn([left_size, left_size], dtype=torch.float16)
-                right_matrix = torch.randn([right_size, right_size], dtype=torch.float16)
+                right_matrix = torch.randn(
+                    [right_size, right_size], dtype=torch.float16
+                )
                 self.register_buffer("left_matrix", left_matrix)
                 self.register_buffer("right_matrix", right_matrix)
             else:

@@ -3,12 +3,13 @@ import torch
 from flatquant.function_utils import get_paras_dict_by_name
 import logging
 
+
 def kronecker_matmul(x, hadL, hadR):
     """equivalent to
-    
-        had = torch.kron(hadL, hadR)
-        x = x.reshape(-1, had.shape[0])
-        x = x.matmul(had).reshape(init_shape)
+
+    had = torch.kron(hadL, hadR)
+    x = x.reshape(-1, had.shape[0])
+    x = x.matmul(had).reshape(init_shape)
     """
     init_shape = x.shape
     x = x.reshape(-1, hadL.shape[0], hadR.shape[0])
@@ -45,8 +46,14 @@ def save_parametrized_checkpoint(model, args):
     for i in range(len(model.model.layers)):
         layer = model.model.layers[i]
         quanted_parameters[i] = layer.state_dict()
-    torch.save(quanted_parameters, os.path.join(args.exp_dir, f"parametrized_paras.pth"))
-    logging.info("saved paramaters at {}".format(os.path.join(args.exp_dir, f"parametrized_paras.pth")))
+    torch.save(
+        quanted_parameters, os.path.join(args.exp_dir, f"parametrized_paras.pth")
+    )
+    logging.info(
+        "saved paramaters at {}".format(
+            os.path.join(args.exp_dir, f"parametrized_paras.pth")
+        )
+    )
 
 
 def load_flat_parameters(args, model, path=None):
@@ -55,7 +62,7 @@ def load_flat_parameters(args, model, path=None):
     else:
         flat_parameters = torch.load(os.path.join(path, f"flat_parameters.pth"))
     layers = model.model.layers
-    
+
     for i in range(len(flat_parameters.keys())):
         flat_param = flat_parameters[i]
         layers[i].load_state_dict(flat_param, strict=False)
@@ -68,10 +75,19 @@ def save_flat_matrices(args, model):
         layer = model.model.layers[i]
         layer.self_attn.rep_matrix_only()
         layer.mlp.rep_matrix_only()
-        paras_name = ["trans.matrix", "trans.diag_scale", "clip_factor_w", "clip_factor_a"]
+        paras_name = [
+            "trans.matrix",
+            "trans.diag_scale",
+            "clip_factor_w",
+            "clip_factor_a",
+        ]
         flat_matrices[i] = get_paras_dict_by_name(layer, required_names=paras_name)
     torch.save(flat_matrices, os.path.join(args.exp_dir, f"flat_matrices.pth"))
-    logging.info("saved paramaters at {}".format(os.path.join(args.exp_dir, f"flat_matrices.pth")))
+    logging.info(
+        "saved paramaters at {}".format(
+            os.path.join(args.exp_dir, f"flat_matrices.pth")
+        )
+    )
 
 
 def load_flat_matrices(args, model, path=None):
@@ -80,12 +96,10 @@ def load_flat_matrices(args, model, path=None):
     else:
         flat_parameters = torch.load(os.path.join(path, f"flat_matrices.pth"))
     layers = model.model.layers
-    
+
     for i in range(len(flat_parameters.keys())):
         flat_param = flat_parameters[i]
         layers[i].self_attn.rep_matrix_only()
         layers[i].mlp.rep_matrix_only()
         layers[i].load_state_dict(flat_param, strict=False)
     return model
-
-

@@ -48,8 +48,7 @@ def get_act_stats(model, dataset):
     for name, m in model.named_modules():
         if isinstance(m, target_layer_type) and not "lm_head" in name:
             hooks.append(
-                m.register_forward_hook(
-                    functools.partial(stat_input_hook, name=name))
+                m.register_forward_hook(functools.partial(stat_input_hook, name=name))
             )
 
     for data in dataset:
@@ -73,16 +72,21 @@ def get_flatness(args, logger, transform_type=None):
 
     # get calibration data
     trainloader = data_utils.get_loaders(
-        args, args.cali_dataset, nsamples=args.nsamples,
-        seed=args.seed, model=args.model,
-        seqlen=model.seqlen, eval_mode=False
+        args,
+        args.cali_dataset,
+        nsamples=args.nsamples,
+        seed=args.seed,
+        model=args.model,
+        seqlen=model.seqlen,
+        eval_mode=False,
     )
     logger.info("Finished loading training data.")
 
     # apply pre-quantization transformations
     if transform_type is not None:
         if transform_type == "flatquant":
-            args.w_bits = 4; args.a_bits = 4
+            args.w_bits = 4
+            args.a_bits = 4
             model = apply_flatquant_to_model(args, model)
             logger.info("Finished applying FlatQuant to model.")
             flat_utils.load_flat_matrices(args, model, path=args.matrix_path)
@@ -96,7 +100,7 @@ def get_flatness(args, logger, transform_type=None):
             args.act_scales = torch.load(args.act_scales_path)
             args.smooth_alpha = 0.85
         else:
-            raise NotImplementedError        
+            raise NotImplementedError
 
     if args.distribute_model:
         utils.distribute_model(model)
@@ -112,9 +116,7 @@ def get_flatness(args, logger, transform_type=None):
         if transform_type is None or transform_type == "flatquant":
             x_flatness = LA.norm(x.cpu().numpy(), axis=0)
             w_flatness = LA.norm(w.cpu().numpy(), axis=0)
-            flatness[name] = {
-                "x": x_flatness, "w": w_flatness
-            }
+            flatness[name] = {"x": x_flatness, "w": w_flatness}
         elif transform_type == "hadamard":
             hidden_dim = x.shape[-1]
             if hadamard_utils.is_pow2(hidden_dim):
@@ -129,27 +131,33 @@ def get_flatness(args, logger, transform_type=None):
                 w_had = flat_utils.kronecker_matmul(w.cuda(), had_left, had_right)
             x_had_flatness = LA.norm(x_had.cpu().numpy(), axis=0)
             w_had_flatness = LA.norm(w_had.cpu().numpy(), axis=0)
-            flatness[name] = {
-                "x": x_had_flatness, "w": w_had_flatness
-            }
+            flatness[name] = {"x": x_had_flatness, "w": w_had_flatness}
         elif transform_type == "smoothquant":
             act_scales = args.act_scales[name].to(x.device)
             weight_scales = w.abs().max(dim=0)[0].clamp(min=1e-5)
             scales = (
-                (act_scales.pow(args.smooth_alpha) / weight_scales.pow(1 - args.smooth_alpha))
-                .clamp(min=1e-5)
-            )
+                act_scales.pow(args.smooth_alpha)
+                / weight_scales.pow(1 - args.smooth_alpha)
+            ).clamp(min=1e-5)
             x_sq = x / scales
             w_sq = w * scales
             x_sq_flatness = LA.norm(x_sq.cpu().numpy(), axis=0)
             w_sq_flatness = LA.norm(w_sq.cpu().numpy(), axis=0)
-            flatness[name] = {
-                "x": x_sq_flatness, "w": w_sq_flatness
-            }
+            flatness[name] = {"x": x_sq_flatness, "w": w_sq_flatness}
 
     args.cache_dir = os.path.join(args.vis_dir, ".cache")
     os.makedirs(args.cache_dir, exist_ok=True)
-    torch.save(flatness, os.path.join(args.cache_dir, f"flatness_{transform_type}.pt" if transform_type is not None else f"flatness.pt"))
+    torch.save(
+        flatness,
+        os.path.join(
+            args.cache_dir,
+            (
+                f"flatness_{transform_type}.pt"
+                if transform_type is not None
+                else f"flatness.pt"
+            ),
+        ),
+    )
     logger.info(f"Flatness stats saved at {args.cache_dir}.")
 
     del model
@@ -164,9 +172,13 @@ def get_act_scales(args, logger):
 
     # get calibration data
     dataset = data_utils.get_loaders(
-        args, args.cali_dataset, nsamples=args.nsamples,
-        seed=args.seed, model=args.model,
-        seqlen=model.seqlen, eval_mode=False
+        args,
+        args.cali_dataset,
+        nsamples=args.nsamples,
+        seed=args.seed,
+        model=args.model,
+        seqlen=model.seqlen,
+        eval_mode=False,
     )
     logger.info("Finished loading training data.")
 
@@ -198,8 +210,7 @@ def get_act_scales(args, logger):
     for name, m in model.named_modules():
         if isinstance(m, target_layer_type) and not "lm_head" in name:
             hooks.append(
-                m.register_forward_hook(
-                    functools.partial(stat_input_hook, name=name))
+                m.register_forward_hook(functools.partial(stat_input_hook, name=name))
             )
 
     for i in tqdm(range(len(dataset))):
@@ -220,9 +231,13 @@ def get_act_scales(args, logger):
     return act_scales
 
 
-def plot_flatness(args, name, vectors, vector_names, y_max=None, y_broken=None, label_pad=15):
+def plot_flatness(
+    args, name, vectors, vector_names, y_max=None, y_broken=None, label_pad=15
+):
     for i in range(len(vectors)):
-        sorted_indices = sorted(range(len(vectors[i])), key=lambda k: abs(vectors[i][k]), reverse=True)
+        sorted_indices = sorted(
+            range(len(vectors[i])), key=lambda k: abs(vectors[i][k]), reverse=True
+        )
         vectors[i] = [vectors[i][j] for j in sorted_indices]
 
     colors = ["#f44336", "#0288d1", "#8bc34a", "#808080"]
@@ -242,15 +257,30 @@ def plot_flatness(args, name, vectors, vector_names, y_max=None, y_broken=None, 
     for i in range(len(vectors)):
         x = np.linspace(0, len(vectors[i]) - 1, step_cnt)
         y = np.interp(x, range(len(vectors[i])), vectors[i])
-        ax1.plot(x, y, color=colors[i], linewidth=linewidth, zorder=1000*(len(vectors) - i), label=vector_names[i])
-    
-    ax1.set_ylabel("Magnitude", fontsize=label_fontsize, labelpad=fontsize+label_pad if y_broken is not None else None)
-    ax1.set_xlabel("Channels", fontsize=label_fontsize, labelpad=fontsize+8 if y_broken is not None else None)
-    ax1.grid(axis='x', linestyle='--')
-    ax1.grid(axis='y', linestyle='--')
-    ax1.tick_params(axis="x", labelsize=fontsize-2)
-    ax1.tick_params(axis="y", labelsize=fontsize-2)
-    ax1.legend(loc="upper right", fontsize=fontsize-2)
+        ax1.plot(
+            x,
+            y,
+            color=colors[i],
+            linewidth=linewidth,
+            zorder=1000 * (len(vectors) - i),
+            label=vector_names[i],
+        )
+
+    ax1.set_ylabel(
+        "Magnitude",
+        fontsize=label_fontsize,
+        labelpad=fontsize + label_pad if y_broken is not None else None,
+    )
+    ax1.set_xlabel(
+        "Channels",
+        fontsize=label_fontsize,
+        labelpad=fontsize + 8 if y_broken is not None else None,
+    )
+    ax1.grid(axis="x", linestyle="--")
+    ax1.grid(axis="y", linestyle="--")
+    ax1.tick_params(axis="x", labelsize=fontsize - 2)
+    ax1.tick_params(axis="y", labelsize=fontsize - 2)
+    ax1.legend(loc="upper right", fontsize=fontsize - 2)
     if y_broken is not None:
         for spine in ax1.spines["top"]:
             spine.set_visible(True)
@@ -271,10 +301,16 @@ def plot_flatness(args, name, vectors, vector_names, y_max=None, y_broken=None, 
     plt.close()
 
 
-def plot_flatness_all_layers(args, flatness_flatquant, flatness_hadamard,
-                             flatness_smoothquant, flatness_vanilla):
+def plot_flatness_all_layers(
+    args, flatness_flatquant, flatness_hadamard, flatness_smoothquant, flatness_vanilla
+):
     for name in flatness_vanilla.keys():
-        xw_flatnesses = [flatness_flatquant[name + ".linear"], flatness_hadamard[name], flatness_smoothquant[name], flatness_vanilla[name]]
+        xw_flatnesses = [
+            flatness_flatquant[name + ".linear"],
+            flatness_hadamard[name],
+            flatness_smoothquant[name],
+            flatness_vanilla[name],
+        ]
         flatness_names = ["FlatQuant", "Hadamard", "SmoothQuant", "Vanilla"]
         x_flatnesses = [xw_flatness["x"] for xw_flatness in xw_flatnesses]
         w_flatnesses = [xw_flatness["w"] for xw_flatness in xw_flatnesses]

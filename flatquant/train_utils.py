@@ -6,8 +6,14 @@ from contextlib import nullcontext
 import torch
 import torch.nn as nn
 
-from flatquant.function_utils import set_require_grad_all, get_n_set_parameters_byname, get_paras_dict_by_name, check_params_grad
+from flatquant.function_utils import (
+    set_require_grad_all,
+    get_n_set_parameters_byname,
+    get_paras_dict_by_name,
+    check_params_grad,
+)
 from flatquant.quant_utils import set_quantizer_state
+
 
 def cali_flat_quant(args, model, dataloader, dev, logger):
     model.eval()
@@ -38,6 +44,7 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
         (args.nsamples, model.seqlen, model.config.hidden_size), dtype=dtype, device=dev
     )
     cache = {"i": 0}
+
     class Catcher(nn.Module):
         def __init__(self, module):
             super().__init__()
@@ -49,6 +56,7 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
             cache["attention_mask"] = kwargs["attention_mask"]
             cache["position_ids"] = kwargs["position_ids"]
             raise ValueError
+
     layers[0] = Catcher(layers[0])
     with torch.no_grad():
         for batch in dataloader:
@@ -65,7 +73,7 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
         attention_mask_batch = attention_mask.repeat(args.cali_bsz, 1, 1, 1).float()
     else:
         attention_mask_batch = None
-    
+
     # move embedding layer and first layer to cpu
     layers[0] = layers[0].module
     layers[0] = layers[0].cpu()
@@ -76,8 +84,8 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
     torch.cuda.empty_cache()
 
     # same input of first layer for fp model and quant model
-    fp_inps = inps   # take output of fp model as input
-    fp_outs = torch.zeros_like(inps)   # take output of fp model as input
+    fp_inps = inps  # take output of fp model as input
+    fp_outs = torch.zeros_like(inps)  # take output of fp model as input
 
     loss_func = torch.nn.MSELoss()
     # start training
@@ -97,7 +105,11 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
         layer.mlp._ori_mode = True
         with torch.no_grad():
             for j in range(args.nsamples):
-                fp_outs[j] = layer(fp_inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
+                fp_outs[j] = layer(
+                    fp_inps[j].unsqueeze(0),
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                )[0]
         layer.self_attn._ori_mode = False
         layer.mlp._ori_mode = False
         if args.diag_init == "sq_style":
@@ -112,23 +124,71 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
         set_require_grad_all(layer, False)
         trained_params, paras_name = [], []
         if args.cali_trans:
-            trained_params.append({"params": get_n_set_parameters_byname(layer, ["trans.linear", ]), "lr": args.flat_lr})
+            trained_params.append(
+                {
+                    "params": get_n_set_parameters_byname(
+                        layer,
+                        [
+                            "trans.linear",
+                        ],
+                    ),
+                    "lr": args.flat_lr,
+                }
+            )
             paras_name.append("trans.linear")
         if args.add_diag:
-            trained_params.append({"params": get_n_set_parameters_byname(layer, ["trans.diag_scale", ]), "lr": args.flat_lr})
+            trained_params.append(
+                {
+                    "params": get_n_set_parameters_byname(
+                        layer,
+                        [
+                            "trans.diag_scale",
+                        ],
+                    ),
+                    "lr": args.flat_lr,
+                }
+            )
             paras_name.append("trans.diag_scale")
         if args.lwc:
-            trained_params.append({"params": get_n_set_parameters_byname(layer, ["clip_factor_w", ]), "lr": args.flat_lr * 10})
+            trained_params.append(
+                {
+                    "params": get_n_set_parameters_byname(
+                        layer,
+                        [
+                            "clip_factor_w",
+                        ],
+                    ),
+                    "lr": args.flat_lr * 10,
+                }
+            )
             paras_name.append("clip_factor_w")
         if args.lac:
-            trained_params.append({"params": get_n_set_parameters_byname(layer, ["clip_factor_a", ]), "lr": args.flat_lr * 10})
+            trained_params.append(
+                {
+                    "params": get_n_set_parameters_byname(
+                        layer,
+                        [
+                            "clip_factor_a",
+                        ],
+                    ),
+                    "lr": args.flat_lr * 10,
+                }
+            )
             paras_name.append("clip_factor_a")
 
         optimizer = torch.optim.AdamW(trained_params)
-        scheduler_main = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * (args.nsamples // args.cali_bsz), eta_min=args.flat_lr * 1e-3)
+        scheduler_main = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=args.epochs * (args.nsamples // args.cali_bsz),
+            eta_min=args.flat_lr * 1e-3,
+        )
         if args.warmup:
-            scheduler_warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, total_iters=16)
-            scheduler = torch.optim.lr_scheduler.ChainedScheduler([scheduler_warmup, scheduler_main])
+            scheduler_warmup = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=0.01, total_iters=16
+            )
+            scheduler = torch.optim.lr_scheduler.ChainedScheduler(
+                [scheduler_warmup, scheduler_main]
+            )
         else:
             scheduler = scheduler_main
         # check_params_grad(layer)
@@ -139,22 +199,32 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
             with traincast():
                 for j in range(args.nsamples // args.cali_bsz):
                     index = j * args.cali_bsz
-                    quant_out = layer(fp_inps[index:index+args.cali_bsz,], attention_mask=attention_mask_batch, position_ids=position_ids)[0]
-                    loss = loss_func(fp_outs[index:index+args.cali_bsz,], quant_out)
+                    quant_out = layer(
+                        fp_inps[index : index + args.cali_bsz,],
+                        attention_mask=attention_mask_batch,
+                        position_ids=position_ids,
+                    )[0]
+                    loss = loss_func(fp_outs[index : index + args.cali_bsz,], quant_out)
                     mse += loss.detach().cpu()
                     loss = loss / loss.clone().detach()
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
                     scheduler.step()
-            cur_lr = optimizer.state_dict()['param_groups'][0]['lr']
-            logger.info(f"layer {i} lwc lac iter {epoch}, lr {cur_lr:.8f}  time {time.time() - start_tick:.6f}s, mse: {mse:.8f}" )
+            cur_lr = optimizer.state_dict()["param_groups"][0]["lr"]
+            logger.info(
+                f"layer {i} lwc lac iter {epoch}, lr {cur_lr:.8f}  time {time.time() - start_tick:.6f}s, mse: {mse:.8f}"
+            )
 
         fp_inps, fp_outs = fp_outs, fp_inps
         layers[i] = layer.to("cpu")
         flat_parameters[i] = get_paras_dict_by_name(layer, required_names=paras_name)
         torch.save(flat_parameters, os.path.join(args.exp_dir, f"flat_parameters.pth"))
-        logger.info("saved paramaters at {}".format(os.path.join(args.exp_dir, f"flat_parameters.pth")))
+        logger.info(
+            "saved paramaters at {}".format(
+                os.path.join(args.exp_dir, f"flat_parameters.pth")
+            )
+        )
         for name, param in layer.named_parameters():
             param.requires_grad = False
             if name in dtype_dict.keys():
@@ -167,4 +237,3 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
     torch.cuda.empty_cache()
     model.config.use_cache = use_cache
     return model
-

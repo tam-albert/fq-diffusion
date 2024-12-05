@@ -10,9 +10,12 @@ from flatquant.trans_utils import SVDSingleTransMatrix, SVDDecomposeTransMatrix
 from flatquant.trans_utils import InvSingleTransMatrix, InvDecomposeTransMatrix
 from flatquant.flat_linear import FlatQuantizedLinear
 
-from transformers.models.qwen2.modeling_qwen2 import Qwen2MLP, Qwen2Attention, \
-                                                     apply_rotary_pos_emb, repeat_kv
-
+from transformers.models.qwen2.modeling_qwen2 import (
+    Qwen2MLP,
+    Qwen2Attention,
+    apply_rotary_pos_emb,
+    repeat_kv,
+)
 
 
 class FlatQuantQwen2MLP(torch.nn.Module):
@@ -30,19 +33,33 @@ class FlatQuantQwen2MLP(torch.nn.Module):
         self._ori_mode = False
         self.diag_init = args.diag_init
         if self.diag_init == "sq_style":
-            self.up_smax = torch.ones_like(self.up_proj.linear.weight.abs().max(dim=0)[0]).cuda() * 1e-5
-            self.down_smax = torch.ones_like(self.down_proj.linear.weight.abs().max(dim=0)[0]).cuda() * 1e-5
-        
+            self.up_smax = (
+                torch.ones_like(self.up_proj.linear.weight.abs().max(dim=0)[0]).cuda()
+                * 1e-5
+            )
+            self.down_smax = (
+                torch.ones_like(self.down_proj.linear.weight.abs().max(dim=0)[0]).cuda()
+                * 1e-5
+            )
+
     def add_fq_trans(self):
         if self.args.direct_inv:
             DecomposeTransMatrix = InvDecomposeTransMatrix
         else:
             DecomposeTransMatrix = SVDDecomposeTransMatrix
         if self.args.w_bits < 16 or self.args.a_bits < 16:
-            up_dim_left, up_dim_right = get_decompose_dim(self.up_proj.linear.weight.shape[1])
-            self.up_gate_trans = DecomposeTransMatrix(up_dim_left, up_dim_right, add_diag=self.args.add_diag)
-            down_dim_left, down_dim_right = get_decompose_dim(self.down_proj.linear.weight.shape[1])
-            self.down_trans = DecomposeTransMatrix(down_dim_left, down_dim_right, add_diag=self.args.add_diag)
+            up_dim_left, up_dim_right = get_decompose_dim(
+                self.up_proj.linear.weight.shape[1]
+            )
+            self.up_gate_trans = DecomposeTransMatrix(
+                up_dim_left, up_dim_right, add_diag=self.args.add_diag
+            )
+            down_dim_left, down_dim_right = get_decompose_dim(
+                self.down_proj.linear.weight.shape[1]
+            )
+            self.down_trans = DecomposeTransMatrix(
+                down_dim_left, down_dim_right, add_diag=self.args.add_diag
+            )
         else:
             self.up_gate_trans, self.down_trans = None, None
 
@@ -63,12 +80,18 @@ class FlatQuantQwen2MLP(torch.nn.Module):
         return down_states
 
     def _ori_forward(self, x):
-        '''origin implement: down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))'''
+        """origin implement: down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))"""
         if self.diag_init == "sq_style":
-            self.up_smax = torch.maximum(self.up_smax, x.reshape(-1, x.shape[-1]).abs().max(0)[0].clone().detach())
+            self.up_smax = torch.maximum(
+                self.up_smax,
+                x.reshape(-1, x.shape[-1]).abs().max(0)[0].clone().detach(),
+            )
         x = self.act_fn(self.gate_proj._ori_forward(x)) * self.up_proj._ori_forward(x)
         if self.diag_init == "sq_style":
-            self.down_smax = torch.maximum(self.down_smax, x.reshape(-1, x.shape[-1]).abs().max(0)[0].clone().detach())
+            self.down_smax = torch.maximum(
+                self.down_smax,
+                x.reshape(-1, x.shape[-1]).abs().max(0)[0].clone().detach(),
+            )
         down_states = self.down_proj._ori_forward(x)
         return down_states
 
@@ -77,7 +100,9 @@ class FlatQuantQwen2MLP(torch.nn.Module):
             return self._ori_forward(x)
         return self._trans_forward(x)
 
-    def reparameterize(self, ):
+    def reparameterize(
+        self,
+    ):
         if self.up_gate_trans is not None:
             self.up_gate_trans.to_eval_mode()
             self.down_trans.to_eval_mode()
@@ -90,22 +115,36 @@ class FlatQuantQwen2MLP(torch.nn.Module):
         if self.down_trans is not None and self.down_trans.add_diag:
             up_weight = self.up_proj.linear.weight
             ori_dtype = up_weight.dtype
-            up_weight = up_weight.to(torch.float64).T.mul(self.down_trans.diag_scale.to(torch.float64)).T
+            up_weight = (
+                up_weight.to(torch.float64)
+                .T.mul(self.down_trans.diag_scale.to(torch.float64))
+                .T
+            )
             self.up_proj.linear.weight.data = up_weight.to(ori_dtype)
             self.down_trans.use_diag = False
 
     def init_diag_scale(self, alpha=0.5):
         assert hasattr(self, "up_smax") and hasattr(self, "down_smax")
-        upw_smax = torch.cat([self.up_proj.linear.weight, self.gate_proj.linear.weight], dim=0).abs().max(dim=0)[0]
+        upw_smax = (
+            torch.cat([self.up_proj.linear.weight, self.gate_proj.linear.weight], dim=0)
+            .abs()
+            .max(dim=0)[0]
+        )
         downw_smax = self.down_proj.linear.weight.abs().max(dim=0)[0]
         if self.up_gate_trans is not None:
-            self.up_gate_trans.diag_scale.data = get_init_scale(upw_smax, self.up_smax, alpha)
+            self.up_gate_trans.diag_scale.data = get_init_scale(
+                upw_smax, self.up_smax, alpha
+            )
         if self.down_trans is not None:
-            self.down_trans.diag_scale.data = get_init_scale(downw_smax, self.down_smax, alpha)
+            self.down_trans.diag_scale.data = get_init_scale(
+                downw_smax, self.down_smax, alpha
+            )
         del self.up_smax, self.down_smax
         self.diag_init = None
 
-    def rep_matrix_only(self, ):
+    def rep_matrix_only(
+        self,
+    ):
         if self.up_gate_trans is not None:
             self.up_gate_trans.to_eval_mode()
             self.down_trans.to_eval_mode()
@@ -115,7 +154,7 @@ class FlatQuantQwen2Attention(Qwen2Attention):
     def __init__(self, args, module: Qwen2Attention):
         super().__init__(module.config, module.layer_idx)
         self.args = args
-        
+
         self.q_proj = FlatQuantizedLinear(args, module.q_proj)
         self.k_proj = FlatQuantizedLinear(args, module.k_proj)
         self.v_proj = FlatQuantizedLinear(args, module.v_proj)
@@ -123,29 +162,54 @@ class FlatQuantQwen2Attention(Qwen2Attention):
         self.add_fq_trans()
 
         if args.q_bits < 16:
-            self.q_cache_quantizer = ActivationQuantizer(bits=args.q_bits, \
-                                        sym=not(args.q_asym), lac=args.lac, groupsize=-1, )
+            self.q_cache_quantizer = ActivationQuantizer(
+                bits=args.q_bits,
+                sym=not (args.q_asym),
+                lac=args.lac,
+                groupsize=-1,
+            )
         if args.k_bits < 16:
-            self.k_cache_quantizer = ActivationQuantizer(bits=args.k_bits, \
-                                        sym=not(args.k_asym), lac=args.lac, groupsize=-1, )
+            self.k_cache_quantizer = ActivationQuantizer(
+                bits=args.k_bits,
+                sym=not (args.k_asym),
+                lac=args.lac,
+                groupsize=-1,
+            )
         if args.v_bits < 16:
-            self.v_cache_quantizer = ActivationQuantizer(bits=args.v_bits, \
-                                        sym=not(args.v_asym), lac=args.lac, groupsize=-1, )
+            self.v_cache_quantizer = ActivationQuantizer(
+                bits=args.v_bits,
+                sym=not (args.v_asym),
+                lac=args.lac,
+                groupsize=-1,
+            )
 
         self._ori_mode = False
         self._eval_mode = False
         self.diag_init = args.diag_init
         if self.diag_init == "sq_style":
-            self.ln_smax = torch.ones_like(self.q_proj.linear.weight.abs().max(dim=0)[0]).cuda() * 1e-5
+            self.ln_smax = (
+                torch.ones_like(self.q_proj.linear.weight.abs().max(dim=0)[0]).cuda()
+                * 1e-5
+            )
 
     def add_fq_trans(self):
         if self.args.direct_inv:
-            SingleTransMatrix, DecomposeTransMatrix = InvSingleTransMatrix, InvDecomposeTransMatrix
+            SingleTransMatrix, DecomposeTransMatrix = (
+                InvSingleTransMatrix,
+                InvDecomposeTransMatrix,
+            )
         else:
-            SingleTransMatrix, DecomposeTransMatrix = SVDSingleTransMatrix, SVDDecomposeTransMatrix
+            SingleTransMatrix, DecomposeTransMatrix = (
+                SVDSingleTransMatrix,
+                SVDDecomposeTransMatrix,
+            )
         if self.args.w_bits < 16 or self.args.a_bits < 16:
-            ln_dim_left, ln_dim_right = get_decompose_dim(self.q_proj.linear.weight.shape[1])
-            self.ln_trans = DecomposeTransMatrix(ln_dim_left, ln_dim_right, add_diag=self.args.add_diag)
+            ln_dim_left, ln_dim_right = get_decompose_dim(
+                self.q_proj.linear.weight.shape[1]
+            )
+            self.ln_trans = DecomposeTransMatrix(
+                ln_dim_left, ln_dim_right, add_diag=self.args.add_diag
+            )
             self.o_trans = SingleTransMatrix(self.config.num_attention_heads)
         else:
             self.ln_trans, self.o_trans = None, None
@@ -168,13 +232,21 @@ class FlatQuantQwen2Attention(Qwen2Attention):
         if self.args.separate_vtrans:
             value_states = self.v_proj(hidden_states, qa_trans=self.ln_trans)
         else:
-            value_states = self.v_proj(hidden_states, qa_trans=self.ln_trans, out_trans=self.vcache_trans)
+            value_states = self.v_proj(
+                hidden_states, qa_trans=self.ln_trans, out_trans=self.vcache_trans
+            )
         return query_states, key_states, value_states
 
     def _ori_forward_after_ln(self, hidden_states):
         if self.diag_init == "sq_style" and hasattr(self, "ln_smax"):
-            self.ln_smax = torch.maximum(self.ln_smax, \
-                hidden_states.reshape(-1, hidden_states.shape[-1]).abs().max(0)[0].clone().detach())
+            self.ln_smax = torch.maximum(
+                self.ln_smax,
+                hidden_states.reshape(-1, hidden_states.shape[-1])
+                .abs()
+                .max(0)[0]
+                .clone()
+                .detach(),
+            )
         query_states = self.q_proj._ori_forward(hidden_states)
         key_states = self.k_proj._ori_forward(hidden_states)
         value_states = self.v_proj._ori_forward(hidden_states)
@@ -201,17 +273,37 @@ class FlatQuantQwen2Attention(Qwen2Attention):
             k = self.k_cache_quantizer(k).to(q)
         return q, k
 
-    def forward(self, hidden_states, attention_mask, position_ids, past_key_value, 
-            output_attentions, use_cache, cache_position=None, position_embeddings=None, **kwargs):
+    def forward(
+        self,
+        hidden_states,
+        attention_mask,
+        position_ids,
+        past_key_value,
+        output_attentions,
+        use_cache,
+        cache_position=None,
+        position_embeddings=None,
+        **kwargs,
+    ):
         bsz, q_len, _ = hidden_states.size()
         if self._ori_mode:
-            query_states, key_states, value_states = self._ori_forward_after_ln(hidden_states)
+            query_states, key_states, value_states = self._ori_forward_after_ln(
+                hidden_states
+            )
         else:
-            query_states, key_states, value_states = self._trans_forward_after_ln(hidden_states)
+            query_states, key_states, value_states = self._trans_forward_after_ln(
+                hidden_states
+            )
 
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
-        key_states = key_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(
+            bsz, q_len, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+        key_states = key_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
+        value_states = value_states.view(
+            bsz, q_len, self.num_key_value_heads, self.head_dim
+        ).transpose(1, 2)
 
         if position_embeddings is None:
             # logger.warning_once(
@@ -223,28 +315,42 @@ class FlatQuantQwen2Attention(Qwen2Attention):
             cos, sin = self.rotary_emb(value_states, position_ids)
         else:
             cos, sin = position_embeddings
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        query_states, key_states = apply_rotary_pos_emb(
+            query_states, key_states, cos, sin
+        )
         # ---- here do the quantization ----
         if not self._ori_mode:
             query_states, key_states = self.quant_kcache(query_states, key_states)
             value_states = self.quant_vcache(value_states)
 
         if past_key_value is not None:
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(key_states, value_states, self.layer_idx, cache_kwargs)
+            cache_kwargs = {
+                "sin": sin,
+                "cos": cos,
+                "cache_position": cache_position,
+            }  # Specific to RoPE models
+            key_states, value_states = past_key_value.update(
+                key_states, value_states, self.layer_idx, cache_kwargs
+            )
 
         # repeat k/v heads if n_kv_heads < n_heads
         key_states = repeat_kv(key_states, self.num_key_value_groups)
-        value_states = repeat_kv(value_states, self.num_key_value_groups) # bnsh
-        attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) / math.sqrt(self.head_dim)
+        value_states = repeat_kv(value_states, self.num_key_value_groups)  # bnsh
+        attn_weights = torch.matmul(
+            query_states, key_states.transpose(2, 3)
+        ) / math.sqrt(self.head_dim)
 
         if attention_mask is not None:  # no matter the length, we just slice it
             causal_mask = attention_mask[:, :, :, : key_states.shape[-2]]
             attn_weights = attn_weights + causal_mask
 
         # upcast attention to fp32
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        attn_weights = nn.functional.dropout(attn_weights, p=self.attention_dropout, training=self.training)
+        attn_weights = nn.functional.softmax(
+            attn_weights, dim=-1, dtype=torch.float32
+        ).to(query_states.dtype)
+        attn_weights = nn.functional.dropout(
+            attn_weights, p=self.attention_dropout, training=self.training
+        )
         attn_output = torch.matmul(attn_weights, value_states)
 
         if attn_output.size() != (bsz, self.num_heads, q_len, self.head_dim):
@@ -258,21 +364,36 @@ class FlatQuantQwen2Attention(Qwen2Attention):
         if self._ori_mode:
             attn_output = self.o_proj._ori_forward(attn_output)
         else:
-            # new foward: 
+            # new foward:
             if self.o_trans is None and self.vcache_trans is not None:
                 # attn_output = self.vcache_trans(value_states)
                 init_shape = attn_output.shape
-                attn_output = attn_output.reshape(-1, self.config.num_attention_heads, self.config.hidden_size//self.config.num_attention_heads)
-                attn_output = torch.matmul(attn_output, self.vcache_trans.get_matrix(inv_t=True).T.to(attn_output)).reshape(init_shape)
+                attn_output = attn_output.reshape(
+                    -1,
+                    self.config.num_attention_heads,
+                    self.config.hidden_size // self.config.num_attention_heads,
+                )
+                attn_output = torch.matmul(
+                    attn_output,
+                    self.vcache_trans.get_matrix(inv_t=True).T.to(attn_output),
+                ).reshape(init_shape)
                 attn_output = self.o_proj(attn_output)
             else:
                 init_shape = attn_output.shape
-                attn_output = attn_output.reshape(-1, self.config.num_attention_heads, self.config.hidden_size//self.config.num_attention_heads)
-                attn_output = torch.matmul(self.o_trans.get_matrix().T.to(attn_output), attn_output).reshape(init_shape)
+                attn_output = attn_output.reshape(
+                    -1,
+                    self.config.num_attention_heads,
+                    self.config.hidden_size // self.config.num_attention_heads,
+                )
+                attn_output = torch.matmul(
+                    self.o_trans.get_matrix().T.to(attn_output), attn_output
+                ).reshape(init_shape)
                 if not self._eval_mode:
                     attn_o_og_it = self.o_trans.get_matrix(inv_t=True)
                     attn_v_og_it = self.vcache_trans.get_matrix(inv_t=True)
-                    attn_output = self.o_proj(attn_output, qa_trans=[attn_o_og_it, attn_v_og_it])
+                    attn_output = self.o_proj(
+                        attn_output, qa_trans=[attn_o_og_it, attn_v_og_it]
+                    )
                 else:
                     attn_output = self.o_proj(attn_output)
 
@@ -294,7 +415,9 @@ class FlatQuantQwen2Attention(Qwen2Attention):
         if self.args.separate_vtrans:
             self.v_proj.reparameterize(qa_trans=self.ln_trans)
         else:
-            self.v_proj.reparameterize(qa_trans=self.ln_trans, out_trans=self.vcache_trans)
+            self.v_proj.reparameterize(
+                qa_trans=self.ln_trans, out_trans=self.vcache_trans
+            )
         if self.o_trans is not None and self.vcache_trans is not None:
             attn_o_og_it = self.o_trans.get_matrix(inv_t=True)
             attn_v_og_it = self.vcache_trans.get_matrix(inv_t=True)
@@ -303,13 +426,28 @@ class FlatQuantQwen2Attention(Qwen2Attention):
 
     def init_diag_scale(self, alpha=0.5):
         assert hasattr(self, "ln_smax")
-        qkvw_smax = torch.cat([self.q_proj.linear.weight, self.k_proj.linear.weight, self.v_proj.linear.weight], dim=0).abs().max(dim=0)[0]
+        qkvw_smax = (
+            torch.cat(
+                [
+                    self.q_proj.linear.weight,
+                    self.k_proj.linear.weight,
+                    self.v_proj.linear.weight,
+                ],
+                dim=0,
+            )
+            .abs()
+            .max(dim=0)[0]
+        )
         if self.ln_trans is not None:
-            self.ln_trans.diag_scale.data = get_init_scale(qkvw_smax, self.ln_smax, alpha)
+            self.ln_trans.diag_scale.data = get_init_scale(
+                qkvw_smax, self.ln_smax, alpha
+            )
         del self.ln_smax
         self.diag_init = None
 
-    def rep_matrix_only(self, ):
+    def rep_matrix_only(
+        self,
+    ):
         if self.ln_trans is not None:
             self.ln_trans.to_eval_mode()
         if self.kcache_trans is not None:
@@ -325,7 +463,11 @@ def apply_flatquant_to_qwen(args, model):
     # Replace module with FlatQuant version
     for layer in range(model.config.num_hidden_layers):
         # attn
-        model.model.layers[layer].self_attn = FlatQuantQwen2Attention(args, model.model.layers[layer].self_attn)
+        model.model.layers[layer].self_attn = FlatQuantQwen2Attention(
+            args, model.model.layers[layer].self_attn
+        )
         # mlp
-        model.model.layers[layer].mlp = FlatQuantQwen2MLP(args, model.model.layers[layer].mlp)
+        model.model.layers[layer].mlp = FlatQuantQwen2MLP(
+            args, model.model.layers[layer].mlp
+        )
     return model

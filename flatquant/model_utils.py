@@ -1,9 +1,13 @@
+import logging
+
+import diffusers
 import torch
 import transformers
-import logging
-from flatquant.utils import skip
-from flatquant.model_tools.llama_utils import apply_flatquant_to_llama
+
 from flatquant.model_tools.llama31_utils import apply_flatquant_to_llama_31
+from flatquant.model_tools.llama_utils import apply_flatquant_to_llama
+from flatquant.model_tools.pixart_utils import apply_flatquant_to_pixart
+from flatquant.utils import skip
 
 
 def skip_initialization():
@@ -81,6 +85,17 @@ def get_opt(model_name):
     model.seqlen = model.config.max_position_embeddings
     logging.info(f"---> Loading {model_name} Model with seq_len: {model.seqlen}")
     raise NotImplementedError("Post-processing for OPT model is not implemented yet.")
+
+
+def get_pixart(model_name):
+    skip_initialization()
+    pipe = diffusers.PixArtSigmaPipeline.from_pretrained(
+        model_name, torch_dtype="auto", low_cpu_mem_usage=True
+    )
+
+    pipe.seqlen = 512  # T5
+
+    return (pipe,)
 
 
 # Unified model loading function

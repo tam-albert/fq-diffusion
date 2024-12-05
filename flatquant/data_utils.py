@@ -1,8 +1,10 @@
 import os
 import pickle
-import datasets
 import random
+
 import transformers
+
+import datasets
 
 
 class TokenizerWrapper:
@@ -107,6 +109,25 @@ def get_pile(nsamples, seed, seqlen, tokenizer):
         tar[:, :-1] = -100
         trainloader.append((inp, tar))
     return trainloader
+
+
+def get_coco(nsamples, seqlen, tokenizer):
+    with open("./datasets/coco.txt") as f:
+        prompts = f.readlines()
+
+    tokens = tokenizer.batch_encode_plus(prompts, return_tensors="pt")
+
+    # Idgaf
+    training_examples = []
+    seq_lens = tokens["attention_mask"].sum(dim=1)
+    for i in range(min(nsamples, len(prompts))):
+        if seq_lens[i] <= seqlen:
+            input_ids = tokens["input_ids"][i][: seq_lens[i]]
+            training_examples.append(
+                (input_ids,)
+            )  # has to be a tuple for compatibility with rest of dataloaders
+
+    return training_examples
 
 
 def get_loaders(

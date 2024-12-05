@@ -37,6 +37,7 @@ def main():
         # 1. replace linear/attention layers with special FlatQuant layers
         model = apply_flatquant_to_model(args, model)
         logger.info("Finished applying FlatQuant to model.")
+        breakpoint()
         if args.resume:
             flat_utils.load_flat_parameters(args, model)
         elif args.reload_matrix:

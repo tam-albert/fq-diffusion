@@ -2,9 +2,14 @@ import os
 import pickle
 import random
 
-import transformers
+import torch
+from tqdm import tqdm
+
+from torch.utils.data import DataLoader, TensorDataset
 
 import datasets
+
+from flatquant import utils
 
 
 class TokenizerWrapper:
@@ -111,44 +116,86 @@ def get_pile(nsamples, seed, seqlen, tokenizer):
     return trainloader
 
 
-def get_coco(nsamples, seq_len, tokenizer):
+def get_coco(
+    nsamples: int, max_seq_len: int, tokenizer, text_encoder, batch_size: int = 32
+) -> DataLoader:
     """
-    Returns a list of COCO prompts, tokenized by the tokenizer
+    Returns a DataLoader of embedded COCO prompts, processing them in batches to manage memory
 
-    This format is kind of dumb but also there are like not that many prompts
-
-    args:
+    Args:
         nsamples: # samples to return
-        seq_len: max seq length of samples to return
+        max_seq_len: max seq length of samples to return
         tokenizer: tokenizer to use
+        text_encoder: text encoder to use
+        batch_size: size of batches for processing prompts
 
-    returns:
-        list of tensors lol
+    Returns:
+        DataLoader containing text embeddings and their lengths
     """
+
+    text_encoder.to(utils.DEV)
+
+    # Read all prompts
     with open("./datasets/coco.txt") as f:
-        prompts = f.readlines()
+        all_prompts = f.readlines()
 
-    tokens = tokenizer.batch_encode_plus(prompts, return_tensors="pt", padding=True)
+    valid_outputs = []
+    valid_lens = []
+    total_processed = 0
 
-    # Idgaf
-    training_examples = []
-    seq_lens = tokens["attention_mask"].sum(dim=1)
-    for i in range(min(nsamples, len(prompts))):
-        if seq_lens[i] <= seq_len:
-            input_ids = tokens["input_ids"][i][: seq_lens[i]]
-            training_examples.append(input_ids)
+    # Process prompts in batches
+    for batch_start in tqdm(
+        range(0, len(all_prompts), batch_size), desc="Embedding captions..."
+    ):
+        batch_end = min(batch_start + batch_size, len(all_prompts))
+        batch_prompts = all_prompts[batch_start:batch_end]
 
-    return training_examples
+        # Tokenize batch with explicit max_length
+        tokens = tokenizer.batch_encode_plus(
+            batch_prompts,
+            return_tensors="pt",
+            padding="max_length",
+            max_length=max_seq_len,
+            truncation=True,
+        ).to(text_encoder.device)
+
+        # Get sequence lengths for this batch
+        seq_lens = tokens["attention_mask"].sum(dim=1)  # (batch_size,)
+
+        # Process through encoder
+        with torch.no_grad():
+            embeddings = text_encoder(**tokens).last_hidden_state
+
+        # Filter by sequence length
+        batch_valid_mask = seq_lens <= max_seq_len
+        batch_valid_outputs = embeddings[batch_valid_mask]
+        batch_valid_lens = seq_lens[batch_valid_mask]
+
+        valid_outputs.append(batch_valid_outputs.cpu())
+        valid_lens.append(batch_valid_lens.cpu())
+
+        total_processed += len(batch_valid_outputs)
+        if total_processed >= nsamples:
+            break
+
+    # Concatenate all batches
+    all_outputs = torch.cat(valid_outputs, dim=0)[:nsamples]
+    all_lens = torch.cat(valid_lens, dim=0)[:nsamples]
+
+    dataset = TensorDataset(all_outputs, all_lens)
+    return DataLoader(dataset, batch_size=1, shuffle=False, pin_memory=True)
 
 
 def get_loaders(
     args,
     name,
     tokenizer,
+    text_encoder,
     nsamples=128,
     seed=0,
     seqlen=2048,
     eval_mode=False,
+    batch_size=16,
 ):
     cache_dir = os.path.join(args.cache_dir, name)
     os.makedirs(cache_dir, exist_ok=True)
@@ -161,7 +208,9 @@ def get_loaders(
             dataset = pickle.load(f)
     else:
         if "coco" in name:
-            dataset = get_coco(nsamples, seqlen, tokenizer)
+            dataset = get_coco(
+                nsamples, seqlen, tokenizer, text_encoder, batch_size=batch_size
+            )
 
         with open(cached_dataset, "wb") as f:
             print(f"Saving cached tokenized dataset at {cached_dataset}...")

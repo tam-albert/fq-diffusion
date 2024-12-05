@@ -1,5 +1,3 @@
-import transformers
-
 import flatquant.utils as utils
 import flatquant.args_utils as args_utils
 import flatquant.model_utils as model_utils
@@ -17,6 +15,7 @@ def main():
     pipe, apply_flatquant_to_model = model_utils.get_model(args.model)
 
     tokenizer = pipe.tokenizer
+    text_encoder = pipe.text_encoder
     scheduler = pipe.scheduler
     model = pipe.transformer
 
@@ -25,10 +24,12 @@ def main():
         args,
         args.cali_dataset,
         tokenizer,
+        text_encoder,
         nsamples=args.nsamples,
         seed=args.seed,
         seqlen=model.seqlen,
         eval_mode=False,
+        batch_size=4,
     )
 
     logger.info("Finished loading training data.")
@@ -37,7 +38,7 @@ def main():
         # 1. replace linear/attention layers with special FlatQuant layers
         model = apply_flatquant_to_model(args, model)
         logger.info("Finished applying FlatQuant to model.")
-        breakpoint()
+
         if args.resume:
             flat_utils.load_flat_parameters(args, model)
         elif args.reload_matrix:

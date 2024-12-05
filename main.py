@@ -14,22 +14,23 @@ def main():
     args, logger = args_utils.parser_gen()
     utils.seed_everything(seed=args.seed)
 
-    model, apply_flatquant_to_model = model_utils.get_model(args.model, args.hf_token)
-    model.eval()
-    tokenizer = transformers.AutoTokenizer.from_pretrained(
-        args.model, use_fast=False, use_auth_token=args.hf_token
-    )
+    pipe, apply_flatquant_to_model = model_utils.get_model(args.model)
+
+    tokenizer = pipe.tokenizer
+    scheduler = pipe.scheduler
+    model = pipe.transformer
 
     # get calibration data
     trainloader = data_utils.get_loaders(
         args,
         args.cali_dataset,
+        tokenizer,
         nsamples=args.nsamples,
         seed=args.seed,
-        model=args.model,
         seqlen=model.seqlen,
         eval_mode=False,
     )
+
     logger.info("Finished loading training data.")
 
     if args.quantize:

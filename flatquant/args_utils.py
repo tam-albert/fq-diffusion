@@ -6,18 +6,19 @@ from termcolor import colored
 import pprint
 
 
-supported_models = [
-    "./modelzoo/llama-2/llama-2-7b",
-    "./modelzoo/llama-2/llama-2-13b",
-    "./modelzoo/llama-2/llama-2-70b",
-    "./modelzoo/llama-3/llama-3-8b",
-    "./modelzoo/llama-3/llama-3-70b",
-    "./modelzoo/llama-3.1/llama-3.1-8b",
-    "./modelzoo/llama-3.1/llama-3.1-70b",
-    "./modelzoo/llama-3.1-instruct/llama-3.1-instruct-8b",
-    "./modelzoo/qwen-2.5-instruct/qwen-2.5-instruct-7b",
-    "./modelzoo/qwen-2.5-instruct/qwen-2.5-instruct-32b",
-]
+supported_models = ["./modelzoo/pixart-sigma/PixArt-Sigma-XL-2-1024-MS"]
+# supported_models = [
+#     "./modelzoo/llama-2/llama-2-7b",
+#     "./modelzoo/llama-2/llama-2-13b",
+#     "./modelzoo/llama-2/llama-2-70b",
+#     "./modelzoo/llama-3/llama-3-8b",
+#     "./modelzoo/llama-3/llama-3-70b",
+#     "./modelzoo/llama-3.1/llama-3.1-8b",
+#     "./modelzoo/llama-3.1/llama-3.1-70b",
+#     "./modelzoo/llama-3.1-instruct/llama-3.1-instruct-8b",
+#     "./modelzoo/qwen-2.5-instruct/qwen-2.5-instruct-7b",
+#     "./modelzoo/qwen-2.5-instruct/qwen-2.5-instruct-32b",
+# ]
 # supported_models = [
 #             'meta-llama/Llama-2-7b-hf',
 #             'meta-llama/Llama-2-13b-hf',
@@ -30,7 +31,8 @@ supported_models = [
 #             'Qwen/Qwen2.5-32B-Instruct',
 #             'Qwen/Qwen2.5-7B-Instruct',
 #             ]
-supported_datasets = ["wikitext2", "c4", "pile"]
+supported_datasets = ["coco"]
+# supported_datasets = ["wikitext2", "c4", "pile"]
 
 
 def parser_gen():
@@ -46,9 +48,6 @@ def parser_gen():
     )
     parser.add_argument(
         "--seed", type=int, default=0, help="Random seed for HuggingFace and PyTorch."
-    )
-    parser.add_argument(
-        "--hf_token", type=str, default=None, help="HuggingFace token for model access."
     )
 
     # Activation Quantization Arguments
@@ -128,7 +127,7 @@ def parser_gen():
     parser.add_argument(
         "--nsamples",
         type=int,
-        default=128,
+        default=64,
         help="Number of calibration data samples for FlatQuant and GPTQ.",
     )
     parser.add_argument(

@@ -98,7 +98,6 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
     # code does this: just interrupt execution after the preprocessing is done, and
     # capture these inputs
 
-    # Prepare model inputs (n_samples x num_timesteps)
     blocks = pipe.transformer.transformer_blocks
 
     hidden_states_cache = []
@@ -149,7 +148,11 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
 
     blocks[0] = blocks[0].module
 
-    # end
+    # done capturing inputs, now we can start training the affine transforms
+
+    # free up VRAM so we can train the affine transforms
+    # we don't need the text encoder or the VAE, so get rid of them
+    # otherwise, this will OOM when we move it to the CPU lol
 
     current = torch.cuda.memory_allocated() / 1024**2
     peak = torch.cuda.max_memory_allocated() / 1024**2
@@ -262,17 +265,21 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
             mse = 0
             start_tick = time.time()
             with traincast():
-                for j in range(args.nsamples * args.cali_timesteps // args.cali_bsz):
-                    index = j * args.cali_bsz
+                for batch_i in range(
+                    args.nsamples * args.cali_timesteps // args.cali_bsz
+                ):
+                    index = batch_i * args.cali_bsz
                     quant_out = block(
-                        hidden_states=fp_inps[j : j + args.cali_bsz],
+                        hidden_states=fp_inps[index : index + args.cali_bsz],
                         encoder_hidden_states=encoder_hidden_states_cache[
-                            j : j + args.cali_bsz
+                            index : index + args.cali_bsz
                         ],
                         encoder_attention_mask=encoder_attention_masks_cache[
-                            j : j + args.cali_bsz
+                            index : index + args.cali_bsz
                         ],
-                        timestep=timestep_embeddings_cache[j : j + args.cali_bsz],
+                        timestep=timestep_embeddings_cache[
+                            index : index + args.cali_bsz
+                        ],
                     )
                     loss = loss_fn(fp_outs[index : index + args.cali_bsz], quant_out)
                     mse += loss.detach().cpu()
@@ -302,7 +309,7 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
         del block
         torch.cuda.empty_cache()
 
-    del inps, fp_inps, fp_outs
+    del fp_inps, fp_outs
     gc.collect()
     torch.cuda.empty_cache()
     return pipe

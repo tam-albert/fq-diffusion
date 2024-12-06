@@ -12,7 +12,6 @@ from accelerate.utils import get_balanced_memory
 torch.backends.cuda.matmul.allow_tf32 = False
 torch.backends.cudnn.allow_tf32 = False
 DEV = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-CPU = torch.device("cpu")
 
 
 def skip(*args, **kwargs):

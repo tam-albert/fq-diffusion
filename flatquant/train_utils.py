@@ -6,17 +6,24 @@ from contextlib import nullcontext
 import torch
 import torch.nn as nn
 
-from flatquant.function_utils import (check_params_grad,
-                                      get_n_set_parameters_byname,
-                                      get_paras_dict_by_name,
-                                      set_require_grad_all)
+from flatquant import utils
+from flatquant.function_utils import (
+    check_params_grad,
+    get_n_set_parameters_byname,
+    get_paras_dict_by_name,
+    set_require_grad_all,
+)
 from flatquant.quant_utils import set_quantizer_state
 
 
-def cali_flat_quant(args, model, dataloader, dev, logger):
+# def prepare_calibration_inputs(args, model, scheduler, dataloader, dev)
+#     """
+#     Prepares calibration inputs for the whole model.
+#     """
+
+
+def cali_flat_quant(args, model, scheduler, dataloader, dev, logger):
     model.eval()
-    use_cache = model.config.use_cache
-    model.config.use_cache = False
 
     # check trainable parameters
     for name, param in model.named_parameters():
@@ -30,8 +37,145 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
         dtype = torch.float16
         traincast = torch.cuda.amp.autocast
 
+    # prepare_calibration_inputs(args, model, scheduler, dataloader, dev)
+
+    ## in this section, we will call the model to get the input of the first layer
+    # we will interrupt execution so the model does all the preprocessing for us
+    # super sus
+
+    # result of interrupting execution
+
+    torch.manual_seed(0)
+    latent = torch.randn((1, 4, 128, 128), dtype=dtype, device=dev)
+
+    # start
+    # Prepare timesteps
+    scheduler.set_timesteps(args.cali_timesteps, device=dev)
+    timesteps = scheduler.timesteps
+    # DELETE:
+    timesteps = torch.tensor([0], dtype=torch.long, device=dev)
+
+    model.adaln_single.to(dev)
+    timesteps, _ = model.adaln_single(
+        timesteps,
+        added_cond_kwargs={"resolution": None, "aspect_ratio": None},
+        hidden_dtype=dtype,
+    )
+    model.adaln_single.cpu()
+
+    # Prepare model inputs (n_samples x num_timesteps)
+    model.caption_projection.to(dev)
+    with torch.no_grad():
+        for prompt_emb, prompt_seq_len in dataloader:
+            # Prepare
+
+            prompt_emb = prompt_emb.to(dev)  # (bsz, max_seq_len, hidden_size)
+            prompt_seq_len = prompt_seq_len.to(dev)  # (bsz,)
+
+            B, L, C = prompt_emb.size()
+
+            attention_mask = (
+                torch.arange(L, device=dev).expand(B, -1) < prompt_seq_len.unsqueeze(1)
+            ).to(dev)
+
+            encoder_hidden_states = model.caption_projection(prompt_emb)
+
+            model.pos_embed.to(dev)
+            model.transformer_blocks[0].to(dev)
+
+            print("Given latents:", latent)
+            print("latent min:", latent.min())
+            print("latent max:", latent.max())
+            print("latent shape:", latent.size())
+            print("latent sum:", latent.sum())
+
+            inp = model.pos_embed(latent)
+            inp = model.transformer_blocks[0](
+                inp,
+                encoder_hidden_states=encoder_hidden_states,
+                encoder_attention_mask=attention_mask,
+                timestep=timesteps,
+            )
+
+            print("input:", inp)
+            print("input min:", inp.min())
+            print("input max:", inp.max())
+            print("input shape:", inp.size())
+            print("input sum:", inp.sum())
+            import ipdb
+
+            ipdb.set_trace()
+
+            model(
+                latent,
+                encoder_hidden_states=prompt_emb.to(dev),
+                encoder_attention_mask=attention_mask,
+                timestep=torch.tensor([0], dtype=torch.long, device=dev),  # TODO: fix,
+                added_cond_kwargs={"resolution": None, "aspect_ratio": None},
+                return_dict=False,
+            )
+    # end
+
+    model.pos_embed.to(dev)
+    model.transformer_blocks[0].to(dev)
+    model.adaln_single.to(dev)
+    model.caption_projection.to(dev)
+
+    class Interrupter(nn.Module):
+        def __init__(self, module):
+            super().__init__()
+            self.module = module
+
+        def forward(self, inp, **kwargs):
+            print("Interrupting execution")
+            print("input:", inp)
+            print("input min:", inp.min())
+            print("input max:", inp.max())
+            print("input shape:", inp.size())
+            print("input sum:", inp.sum())
+            raise ValueError
+
+    model.transformer_blocks[1] = Interrupter(model.transformer_blocks[1])
+    # model.transformer_blocks[0] = Interrupter(model.transformer_blocks[0])
+
+    with torch.no_grad():
+        for prompt_emb, prompt_seq_len in dataloader:
+            prompt_emb.to(dev)  # (bsz, max_seq_len, hidden_size)
+            prompt_seq_len.to(dev)  # (bsz,)
+
+            B, L, C = prompt_emb.size()
+
+            attention_mask = (
+                torch.arange(L).expand(B, -1) < prompt_seq_len.unsqueeze(1)
+            ).to(dev)
+
+            try:
+                print("Given latents:", latent)
+                print("latent min:", latent.min())
+                print("latent max:", latent.max())
+                print("latent shape:", latent.size())
+                print("latent sum:", latent.sum())
+                model(
+                    latent,
+                    encoder_hidden_states=prompt_emb.to(dev),
+                    encoder_attention_mask=attention_mask,
+                    timestep=torch.tensor(
+                        [0], dtype=torch.long, device=dev
+                    ),  # TODO: fix,
+                    added_cond_kwargs={"resolution": None, "aspect_ratio": None},
+                    return_dict=False,
+                )
+            except ValueError:
+                pass
+
+            break
+
+    import ipdb
+
+    ipdb.set_trace()
+
     # move embedding layer and first layer to target device
-    layers = model.model.layers
+    blocks = model.transformer_blocks
     layers[0] = layers[0].to(dev)
     model.model.embed_tokens = model.model.embed_tokens.to(dev)
     if hasattr(model.model, "rotary_emb"):
@@ -80,6 +224,8 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
         model.model.rotary_emb = model.model.rotary_emb.cpu()
     # raise ValueError("Only support for llama-2/Llama-3/qwen-2 now")
     torch.cuda.empty_cache()
+
+    #
 
     # same input of first layer for fp model and quant model
     fp_inps = inps  # take output of fp model as input
@@ -237,5 +383,4 @@ def cali_flat_quant(args, model, dataloader, dev, logger):
     del inps, fp_inps, fp_outs
     gc.collect()
     torch.cuda.empty_cache()
-    model.config.use_cache = use_cache
     return model

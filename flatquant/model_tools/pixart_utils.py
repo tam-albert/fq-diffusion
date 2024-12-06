@@ -1,5 +1,3 @@
-import logging
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,8 +8,6 @@ from flatquant.flat_linear import FlatQuantizedLinear
 from flatquant.function_utils import get_decompose_dim, get_init_scale
 from flatquant.trans_utils import InvDecomposeTransMatrix, SVDDecomposeTransMatrix
 from flatquant.utils import skip_initialization
-
-logger = logging.getLogger(__name__)
 
 
 class FlatQuantPixArtFeedForward(nn.Module):

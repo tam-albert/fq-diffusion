@@ -137,6 +137,12 @@ def parser_gen():
         help="Batch size for FlatQuant. Default is 4.",
     )
     parser.add_argument(
+        "--cali_timesteps",
+        type=int,
+        default=20,
+        help="Number of timesteps to use for each calibration example. Default is 20.",
+    )
+    parser.add_argument(
         "--flat_lr",
         type=float,
         default=1e-5,

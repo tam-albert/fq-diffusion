@@ -46,7 +46,7 @@ def main():
         elif args.cali_trans or args.add_diag or args.lwc or args.lac:
             # 2. calibrate FlatQuant layers (learn affine transforms)
             train_utils.cali_flat_quant(
-                args, model, trainloader, utils.DEV, logger=logger
+                args, model, scheduler, trainloader, utils.DEV, logger=logger
             )
         if args.save_matrix and not args.reload_matrix:
             flat_utils.save_flat_matrices(args, model)

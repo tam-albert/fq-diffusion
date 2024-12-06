@@ -91,7 +91,7 @@ def get_pixart(model_name):
     skip_initialization()
 
     pipe = diffusers.PixArtSigmaPipeline.from_pretrained(
-        model_name, low_cpu_mem_usage=True
+        model_name, torch_dtype=torch.float16, low_cpu_mem_usage=True
     )
 
     pipe.transformer.seqlen = 512  # T5

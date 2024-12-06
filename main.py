@@ -13,30 +13,29 @@ def main():
     utils.seed_everything(seed=args.seed)
 
     pipe, apply_flatquant_to_model = model_utils.get_model(args.model)
+    pipe.to(utils.DEV)
 
-    tokenizer = pipe.tokenizer
-    text_encoder = pipe.text_encoder
-    scheduler = pipe.scheduler
     model = pipe.transformer
 
     # get calibration data
-    trainloader = data_utils.get_loaders(
+    data = data_utils.get_loaders(
         args,
         args.cali_dataset,
-        tokenizer,
-        text_encoder,
         nsamples=args.nsamples,
         seed=args.seed,
-        seqlen=model.seqlen,
         eval_mode=False,
-        batch_size=4,
     )
 
     logger.info("Finished loading training data.")
 
     if args.quantize:
-        # 1. replace linear/attention layers with special FlatQuant layers
-        model = apply_flatquant_to_model(args, model)
+        # 1. prepare calibration data
+        if args.cali_trans or args.add_diag or args.lwc or args.lac:
+            calibration_data = train_utils.prepare_calibration_data(args, pipe, data)
+            logger.info("Finished preparing calibration data.")
+
+        # 2. replace linear/attention layers with special FlatQuant layers
+        pipe.transformer = apply_flatquant_to_model(args, pipe.transformer)
         logger.info("Finished applying FlatQuant to model.")
 
         if args.resume:
@@ -46,7 +45,7 @@ def main():
         elif args.cali_trans or args.add_diag or args.lwc or args.lac:
             # 2. calibrate FlatQuant layers (learn affine transforms)
             train_utils.cali_flat_quant(
-                args, model, scheduler, trainloader, utils.DEV, logger=logger
+                args, pipe, calibration_data, utils.DEV, logger=logger
             )
         if args.save_matrix and not args.reload_matrix:
             flat_utils.save_flat_matrices(args, model)
@@ -57,7 +56,7 @@ def main():
     if args.w_bits < 16:
         save_dict = {}
         if args.gptq:  # GPTQ Weight Quantization
-            quantizers = gptq_utils.gptq_fwrd(model, trainloader, utils.DEV, args)
+            quantizers = gptq_utils.gptq_fwrd(model, data, utils.DEV, args)
         else:  # RTN Weight Quantization
             quantizers = gptq_utils.rtn_fwrd(model, utils.DEV, args)
         save_dict["w_quantizers"] = quantizers

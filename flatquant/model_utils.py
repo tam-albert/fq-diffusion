@@ -9,6 +9,11 @@ from flatquant.model_tools.llama_utils import apply_flatquant_to_llama
 from flatquant.model_tools.pixart_utils import apply_flatquant_to_pixart
 from flatquant.utils import skip
 
+PIXART_IMAGE_HEIGHT = 1024
+PIXART_IMAGE_WIDTH = 1024
+PIXART_LATENT_HEIGHT = PIXART_IMAGE_HEIGHT // 8
+PIXART_LATENT_WIDTH = PIXART_IMAGE_WIDTH // 8
+
 
 def skip_initialization():
     torch.nn.init.kaiming_uniform_ = skip
@@ -91,7 +96,7 @@ def get_pixart(model_name):
     skip_initialization()
 
     pipe = diffusers.PixArtSigmaPipeline.from_pretrained(
-        model_name, torch_dtype=torch.float16, low_cpu_mem_usage=True
+        model_name, torch_dtype=torch.float32, low_cpu_mem_usage=True
     )
 
     pipe.transformer.seqlen = 512  # T5

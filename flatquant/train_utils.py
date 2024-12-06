@@ -75,65 +75,6 @@ def prepare_calibration_data(args, pipe, data) -> list[dict[str, torch.Tensor]]:
     return calibration_data
 
 
-# def prepare_calibration_inputs(args, model, scheduler, dataloader, dev, dtype):
-# """
-# Prepares calibration inputs at different timesteps (according to the scheduler),
-# so that we can calibrate our model for quantization based on the results at
-# different timesteps. Does this by just denoising.
-# """
-
-# model.eval()
-# model.to(dev)
-
-# for prompt_emb, prompt_seq_len in tqdm(
-#     dataloader, desc="Preparing calibration inputs"
-# ):
-#     # prepare timesteps
-#     scheduler.set_timesteps(args.cali_timesteps, device=dev)
-#     timesteps = scheduler.timesteps
-
-#     # prepare attention mask
-#     prompt_emb = prompt_emb.to(dev)
-#     prompt_seq_len = prompt_seq_len.to(dev)
-
-#     B, L, C = prompt_emb.size()
-
-#     attention_mask = (
-#         torch.arange(L, device=dev).expand(B, -1) < prompt_seq_len.unsqueeze(1)
-#     ).to(dev)
-
-#     # initialize latnet
-#     latents = torch.randn(
-#         (1, 4, PIXART_LATENT_HEIGHT, PIXART_LATENT_WIDTH), dtype=dtype, device=dev
-#     )
-
-#     # denoising loop
-#     for t in tqdm(timesteps, desc="Denoising..."):
-#         latent_input = scheduler.scale_model_input(latents, t)
-#         t = t.unsqueeze(0)  # 0-d -> 1-d
-
-#         noise_pred = model(
-#             latent_input,
-#             encoder_hidden_states=prompt_emb,
-#             encoder_attention_mask=attention_mask,
-#             timestep=t,
-#             added_cond_kwargs={"resolution": None, "aspect_ratio": None},
-#             return_dict=False,
-#         )[0]
-
-#         noise_pred = noise_pred.chunk(2, dim=1)[0]
-
-#         latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-
-#     torch.save(latents, "latents.pt")
-
-#     raise ValueError
-
-#     import ipdb
-
-#     ipdb.set_trace()
-
-
 def cali_flat_quant(args, pipe, calibration_data, dev, logger):
     # check trainable parameters
     for name, param in pipe.transformer.named_parameters():

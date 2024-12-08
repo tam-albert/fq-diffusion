@@ -175,139 +175,160 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
     flat_parameters = {}
 
     for i, block in enumerate(blocks):
-        logger.info(f"========= Block {i} =========")
-        dtype_dict = {}
-        block.to(dev)
+        # can change this to loop over just first block to make testing faster
+        if i == 0:
+            logger.info(f"========= Block {i} =========")
+            current = torch.cuda.memory_allocated() / 1024**2
+            peak = torch.cuda.max_memory_allocated() / 1024**2
+            print(f"Current GPU memory: {current:.2f}MB, Peak: {peak:.2f}MB")
+            dtype_dict = {}
+            block = block.to(dev)
 
-        for name, param in block.named_parameters():
-            dtype_dict[name] = param.dtype
+            current = torch.cuda.memory_allocated() / 1024**2
+            print(f"new current GPU memory: {current:.2f}MB")
 
-        with torch.no_grad():
-            block.float()  # run in full-precision
+            for name, param in block.named_parameters():
+                dtype_dict[name] = param.dtype
 
-        # run the layer in full precision and save the outputs
-        fp_outs = []
+            with torch.no_grad():
+                block.float()  # run in full-precision
 
-        # block.self_attn._ori_mode = True
-        block.ff._ori_mode = True
-        with torch.no_grad():
-            for j in tqdm(
-                range(args.nsamples * args.cali_timesteps),
-                desc="collecting block outputs...",
-            ):
-                fp_outs.append(
-                    block(
-                        hidden_states=fp_inps[j : j + 1],
-                        encoder_hidden_states=encoder_hidden_states_cache[j : j + 1],
-                        encoder_attention_mask=encoder_attention_masks_cache[j : j + 1],
-                        timestep=timestep_embeddings_cache[j : j + 1],
-                    )
-                )
+            # run the layer in full precision and save the outputs
+            fp_outs = []
 
-        fp_outs = torch.cat(fp_outs, dim=0)
-        # block.self_attn._ori_mode = False
-        block.ff._ori_mode = False
-
-        # initialize per-channel smoothing factor (SmoothQuant)
-        if args.diag_init == "sq_style":
-            # block.self_attn.init_diag_scale(alpha=args.diag_alpha)
-            block.ff.init_diag_scale(alpha=args.diag_alpha)
-        elif args.diag_init == "one_style":
-            pass
-        else:
-            raise NotImplementedError
-
-        # begin learning affine transforms for this block
-        block = block.to(dev)
-        set_require_grad_all(block, False)
-
-        param_configs = {
-            "cali_trans": {"name": "trans.linear", "lr_multiplier": 1},
-            "add_diag": {"name": "trans.diag_scale", "lr_multiplier": 1},
-            "lwc": {"name": "clip_factor_w", "lr_multiplier": 10},
-            "lac": {"name": "clip_factor_a", "lr_multiplier": 10},
-        }
-
-        trained_params = []
-        paras_name = []
-
-        for arg_name, config in param_configs.items():
-            if getattr(args, arg_name):
-                trained_params.append(
-                    {
-                        "params": get_n_set_parameters_byname(block, [config["name"]]),
-                        "lr": args.flat_lr * config["lr_multiplier"],
-                    }
-                )
-                paras_name.append(config["name"])
-
-        print(f"{trained_params=}")
-        print(f"{paras_name=}")
-
-        optimizer = torch.optim.AdamW(trained_params)
-        scheduler_main = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=args.epochs * (args.nsamples * args.cali_timesteps // args.cali_bsz),
-            eta_min=args.flat_lr * 1e-3,
-        )
-        if args.warmup:
-            scheduler_warmup = torch.optim.lr_scheduler.LinearLR(
-                optimizer, start_factor=0.01, total_iters=16
-            )
-            scheduler = torch.optim.lr_scheduler.ChainedScheduler(
-                [scheduler_warmup, scheduler_main]
-            )
-        else:
-            scheduler = scheduler_main
-        # check_params_grad(layer)
-        # set_quantizer_state(layer, False)
-        for epoch in range(args.epochs):
-            mse = 0
-            start_tick = time.time()
-            with traincast():
-                for batch_i in range(
-                    args.nsamples * args.cali_timesteps // args.cali_bsz
+            # block.self_attn._ori_mode = True
+            block.attn1._ori_mode = True
+            block.attn2._ori_mode = True
+            block.ff._ori_mode = True
+            with torch.no_grad():
+                for j in tqdm(
+                    range(args.nsamples * args.cali_timesteps),
+                    desc="collecting block outputs...",
                 ):
-                    index = batch_i * args.cali_bsz
-                    quant_out = block(
-                        hidden_states=fp_inps[index : index + args.cali_bsz],
-                        encoder_hidden_states=encoder_hidden_states_cache[
-                            index : index + args.cali_bsz
-                        ],
-                        encoder_attention_mask=encoder_attention_masks_cache[
-                            index : index + args.cali_bsz
-                        ],
-                        timestep=timestep_embeddings_cache[
-                            index : index + args.cali_bsz
-                        ],
+                    fp_outs.append(
+                        block(
+                            hidden_states=fp_inps[j : j + 1],
+                            encoder_hidden_states=encoder_hidden_states_cache[j : j + 1],
+                            encoder_attention_mask=encoder_attention_masks_cache[j : j + 1],
+                            timestep=timestep_embeddings_cache[j : j + 1],
+                        )
                     )
-                    loss = loss_fn(fp_outs[index : index + args.cali_bsz], quant_out)
-                    mse += loss.detach().cpu()
-                    loss = loss / loss.clone().detach()
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-                    scheduler.step()
-            cur_lr = optimizer.state_dict()["param_groups"][0]["lr"]
-            logger.info(
-                f"block {i} lwc lac iter {epoch}, lr {cur_lr:.8f}  time {time.time() - start_tick:.6f}s, mse: {mse:.8f}"
-            )
 
-        fp_inps, fp_outs = fp_outs, fp_inps
-        blocks[i] = block.to("cpu")
-        flat_parameters[i] = get_paras_dict_by_name(block, required_names=paras_name)
-        torch.save(flat_parameters, os.path.join(args.exp_dir, f"flat_parameters.pth"))
-        logger.info(
-            "saved paramaters at {}".format(
-                os.path.join(args.exp_dir, f"flat_parameters.pth")
+            fp_outs = torch.cat(fp_outs, dim=0)
+            # block.self_attn._ori_mode = False
+            block.attn1._ori_mode = False
+            block.attn2._ori_mode = False
+            block.ff._ori_mode = False
+
+            # initialize per-channel smoothing factor (SmoothQuant)
+            if args.diag_init == "sq_style":
+                # block.self_attn.init_diag_scale(alpha=args.diag_alpha)
+                block.attn1.init_diag_scale(alpha=args.diag_alpha)
+                block.attn2.init_diag_scale(alpha=args.diag_alpha)
+                block.ff.init_diag_scale(alpha=args.diag_alpha)
+            elif args.diag_init == "one_style":
+                pass
+            else:
+                raise NotImplementedError
+
+            # begin learning affine transforms for this block
+            block = block.to(dev)
+            set_require_grad_all(block, False)
+
+            param_configs = {
+                "cali_trans": {"name": "trans.linear", "lr_multiplier": 1},
+                "add_diag": {"name": "trans.diag_scale", "lr_multiplier": 1},
+                "lwc": {"name": "clip_factor_w", "lr_multiplier": 10},
+                "lac": {"name": "clip_factor_a", "lr_multiplier": 10},
+            }
+
+            trained_params = []
+            paras_name = []
+
+            for arg_name, config in param_configs.items():
+                if getattr(args, arg_name):
+                    trained_params.append(
+                        {
+                            "params": get_n_set_parameters_byname(block, [config["name"]]),
+                            "lr": args.flat_lr * config["lr_multiplier"],
+                        }
+                    )
+                    paras_name.append(config["name"])
+
+            print(f"{trained_params=}")
+            print(f"{paras_name=}")
+
+            optimizer = torch.optim.AdamW(trained_params)
+            scheduler_main = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=args.epochs * (args.nsamples * args.cali_timesteps // args.cali_bsz),
+                eta_min=args.flat_lr * 1e-3,
             )
-        )
-        for name, param in block.named_parameters():
-            param.requires_grad = False
-            if name in dtype_dict.keys():
-                param.data = param.to(dtype_dict[name])
-        del block
-        torch.cuda.empty_cache()
+            if args.warmup:
+                scheduler_warmup = torch.optim.lr_scheduler.LinearLR(
+                    optimizer, start_factor=0.01, total_iters=16
+                )
+                scheduler = torch.optim.lr_scheduler.ChainedScheduler(
+                    [scheduler_warmup, scheduler_main]
+                )
+            else:
+                scheduler = scheduler_main
+            # check_params_grad(layer)
+            # set_quantizer_state(layer, False)
+            for epoch in range(args.epochs):
+                #current = torch.cuda.memory_allocated() / 1024**2
+                #print(f"GPU memory at start of epoch {epoch}: {current:.2f}MB")
+                mse = 0
+                start_tick = time.time()
+                with traincast():
+                    for batch_i in range(
+                        args.nsamples * args.cali_timesteps // args.cali_bsz
+                    ):
+                        index = batch_i * args.cali_bsz
+                        quant_out = block(
+                            hidden_states=fp_inps[index : index + args.cali_bsz],
+                            encoder_hidden_states=encoder_hidden_states_cache[
+                                index : index + args.cali_bsz
+                            ],
+                            encoder_attention_mask=encoder_attention_masks_cache[
+                                index : index + args.cali_bsz
+                            ],
+                            timestep=timestep_embeddings_cache[
+                                index : index + args.cali_bsz
+                            ],
+                        )
+                        #current = torch.cuda.memory_allocated() / 1024**2
+                        #print(f"GPU memory before backprop in epoch {epoch}: {current:.2f}MB")
+                        loss = loss_fn(fp_outs[index : index + args.cali_bsz], quant_out)
+                        #current = torch.cuda.memory_allocated() / 1024**2
+                        #print(f"GPU memory after backprop in epoch {epoch}: {current:.2f}MB")
+                        mse += loss.detach().cpu()
+                        loss = loss / loss.clone().detach()
+                        optimizer.zero_grad()
+                        loss.backward()
+                        optimizer.step()
+                        scheduler.step()
+                        
+                cur_lr = optimizer.state_dict()["param_groups"][0]["lr"]
+                logger.info(
+                    f"block {i} lwc lac iter {epoch}, lr {cur_lr:.8f}  time {time.time() - start_tick:.6f}s, mse: {mse:.8f}"
+                )
+
+            fp_inps, fp_outs = fp_outs, fp_inps
+            blocks[i] = block.to("cpu")
+            flat_parameters[i] = get_paras_dict_by_name(block, required_names=paras_name)
+            torch.save(flat_parameters, os.path.join(args.exp_dir, f"flat_parameters.pth"))
+            logger.info(
+                "saved paramaters at {}".format(
+                    os.path.join(args.exp_dir, f"flat_parameters.pth")
+                )
+            )
+            for name, param in block.named_parameters():
+                param.requires_grad = False
+                if name in dtype_dict.keys():
+                    param.data = param.to(dtype_dict[name])
+            del block
+            torch.cuda.empty_cache()
 
     del fp_inps, fp_outs
     gc.collect()

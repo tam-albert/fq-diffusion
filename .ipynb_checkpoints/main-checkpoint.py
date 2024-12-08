@@ -7,31 +7,10 @@ import flatquant.train_utils as train_utils
 import flatquant.flat_utils as flat_utils
 import gptq_utils
 
-import torch
-from transformers import AutoModel, AutoTokenizer
-from diffusers import PixArtAlphaPipeline
-
-def get_detailed_model_size(model):
-    total_params = 0
-    trainable_params = 0
-    
-    for name, parameter in model.named_parameters():
-        param_count = parameter.nelement()
-        total_params += param_count
-        if parameter.requires_grad:
-            trainable_params += param_count
-        
-        print(f"{name}: {param_count} params, {param_count * parameter.element_size() / 1024**2:.2f} MB")
-    
-    print(f"\nTotal params: {total_params}")
-    print(f"Trainable params: {trainable_params}")
-    print(f"Total model size: {total_params * parameter.element_size() / 1024**2:.2f} MB")
-
 
 def main():
     args, logger = args_utils.parser_gen()
     utils.seed_everything(seed=args.seed)
-    print(args)
 
     pipe, apply_flatquant_to_model = model_utils.get_model(args.model)
     pipe.to(utils.DEV)
@@ -39,9 +18,6 @@ def main():
     model = pipe.transformer
 
     print(model.transformer_blocks)
-
-    # Assuming 'pipe' is your model
-    get_detailed_model_size(pipe.transformer)
 
     # get calibration data
     data = data_utils.get_loaders(
@@ -52,79 +28,49 @@ def main():
         eval_mode=False,
     )
 
-    
+    logger.info("Finished loading training data.")
 
     if args.quantize:
         # 1. prepare calibration data
         if args.cali_trans or args.add_diag or args.lwc or args.lac:
             calibration_data = train_utils.prepare_calibration_data(args, pipe, data)
             logger.info("Finished preparing calibration data.")
-        
+
         # 2. replace linear/attention layers with special FlatQuant layers
         pipe.transformer = apply_flatquant_to_model(args, pipe.transformer)
         logger.info("Finished applying FlatQuant to model.")
 
         if args.resume:
-            flat_utils.load_flat_parameters(args, model, is_pixart = True)
+            flat_utils.load_flat_parameters(args, model)
         elif args.reload_matrix:
-            flat_utils.load_flat_matrices(args, model, path=args.matrix_path, is_pixart = True)
+            flat_utils.load_flat_matrices(args, model, path=args.matrix_path)
         elif args.cali_trans or args.add_diag or args.lwc or args.lac:
             # 2. calibrate FlatQuant layers (learn affine transforms)
             train_utils.cali_flat_quant(
                 args, pipe, calibration_data, utils.DEV, logger=logger
             )
-     
         if args.save_matrix and not args.reload_matrix:
-            flat_utils.save_flat_matrices(args, model, is_pixart = True)
-            print("Finished saving the model")
-        flat_utils.reparameterize_model(model.to('cuda'), is_pixart = True)
+            flat_utils.save_flat_matrices(args, model)
+        flat_utils.reparameterize_model(model)
         logger.info("Finished reparameterize model.")
 
     # 3. actually quantize the weights
     if args.w_bits < 16:
         save_dict = {}
-        quantizers = gptq_utils.rtn_fwrd(model, utils.DEV, args)
+        if args.gptq:  # GPTQ Weight Quantization
+            quantizers = gptq_utils.gptq_fwrd(model, data, utils.DEV, args)
+        else:  # RTN Weight Quantization
+            quantizers = gptq_utils.rtn_fwrd(model, utils.DEV, args)
         save_dict["w_quantizers"] = quantizers
         logger.info("Finished quantizing weights.")
 
-    with torch.no_grad():
-        input_text = "Luffy from ONEPIECE, handsome face, fantasy"
-        pipe.to('cuda')
-        print(pipe(input_text))
+    logger.warning("EVALUATION STILL HAS TO BE IMPLEMENTED")
     return
 
-    # eval stuff below for later:
-
-    fid = FrechetInceptionDistance(feature=2048) 
-
-    transform = transforms.Compose([
-        transforms.Resize((299, 299)),  # Inception expects 299x299
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-
-    def load_and_process_image(image_path):
-        image = default_loader(image_path)  
-        return transform(image).unsqueeze(0) 
-
-    generated_image = load_and_process_image(generated_image_path)
-    target_image = load_and_process_image(target_image_path)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    fid = fid.to(device)
-    generated_image = generated_image.to(device)
-    target_image = target_image.to(device)
-
-    fid.update(generated_image, real=False)  
-    fid.update(target_image, real=True)    
-
-    fid_score = fid.compute()
-    print(f"FID Score: {fid_score.item()}")
-    
-    # if args.distribute_model:
-    #     utils.distribute_model(model)text_encoder.to(device)
-    # else:
-    #     model.to(utils.DEV)
+    if args.distribute_model:
+        utils.distribute_model(model)
+    else:
+        model.to(utils.DEV)
 
     # Evaluating PPL
     for eval_dataset in ["wikitext2", "c4"]:

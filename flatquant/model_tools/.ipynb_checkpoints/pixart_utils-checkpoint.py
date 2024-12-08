@@ -145,7 +145,7 @@ class FlatQuantPixArtFeedForward(nn.Module):
             self.up_trans.to_eval_mode()
             self.down_trans.to_eval_mode()
 
-class FlatQuantPixArtAttention(nn.Module):
+class FlatQuantPixArtSelfAttention(nn.Module):
     def __init__(self, args, module: Attention):
         super().__init__()
         self.args = args
@@ -321,19 +321,8 @@ class FlatQuantPixArtAttention(nn.Module):
             )
         
         if attention_mask is not None:
-            """
-            print(attention_mask)
-            print(f"attention mask shape pre prep is {attention_mask.shape}")
-            print(f"query shapes: {query_states.shape}")
-            print(f"key shapes: {key_states.shape}")
-            print(f"value shapes: {value_states.shape}")
-            """
-            attention_mask = Attention.prepare_attention_mask(self, attention_mask,sequence_length, batch_size)
-            attention_mask = attention_mask.view(batch_size, self.num_attention_heads, -1, attention_mask.shape[-1])
-            """
-            print(f"attention mask shape post prep is {attention_mask.shape}")
-            """
-                
+            attention_mask = Attention.prepare_attention_mask(attention_mask=attention_mask, target_length=sequence_length, batch_size=batch_size)
+
         inner_dim = key_states.shape[-1]
         head_dim = self.head_dim
 
@@ -341,34 +330,40 @@ class FlatQuantPixArtAttention(nn.Module):
         key_states = key_states.view(batch_size, -1, self.num_attention_heads, head_dim).transpose(1, 2)
         value_states = value_states.view(batch_size, -1, self.num_attention_heads, head_dim).transpose(1, 2)
 
-        if not self._ori_mode:
-            query_states, key_states = self.quant_k(query_states, key_states)
-            value_states = self.quant_v(value_states)
         # hidden states = F.scaled_dot_product_attention(query, key, value, attn_mask = attention_mask)
         # ugly way of doing it
 
-        #print(f"query shapes: {query_states.shape}")
-        #print(f"key shapes: {key_states.shape}")
-        #print(f"value shapes: {value_states.shape}")
-        # where the fuck is dividing by sqrt(k)
-        """
-        attention_weights = query_states @ key_states.transpose(-2, -1)
-        if attention_mask is not None:
-            attention_weights += attention_mask
-        # upcast attention to fp32
-        print(attention_weights.shape, attention_weights.dtype)
-        current = torch.cuda.memory_allocated() / 1024**2
-        print(f"GPU memory after attention matrix materialized before softmaxing: {current:.2f}MB")
-        attention_weights = nn.functional.softmax(attention_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
-        # print(f"attention weights shape {attention_weights.shape}")
-        hidden_states = attention_weights @ value_states
-        """
+        print(f"query shapes: {query_states.shape}")
+        print(f"key shapes: {key_states.shape}")
+        print(f"value shapes: {value_states.shape}")
         
-        hidden_states = nn.functional.scaled_dot_product_attention(query_states, key_states, value_states, attention_mask)
+        if attention_mask is None:
+            baddbmm_input = torch.empty(
+                query_states.shape[0], query_states.shape[1], key_states.shape[1], dtype=query_states.dtype, device=query_states.device
+            )
+            beta = 0
+        else:
+            baddbmm_input = attention_mask
+            beta = 1
+        
+        attention_weights = torch.baddbmm(
+            baddbmm_input,
+            query_states,
+            key_states.transpose(-1, -2),
+            beta=beta,
+            alpha=1,
+        )
+        del baddbmm_input
+        # upcast attention to fp32
+        
+        #print(f"query shapes: {query_state.shape}")
+        #attention_weights = query_states @ 
+        attention_weights = nn.functional.softmax(attention_weights, dim=-1, dtype=torch.float32).to(query_states.dtype)
+        hidden_states = torch.bmm(attention_weights, value_states)
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, self.num_attention_heads * head_dim)
 
         if self._ori_mode:
-            hidden_states = self.to_out._ori_forward(hidden_states)
+            hidden_states = self.to_out(hidden_states)
         else:
             if self.o_trans is None and self.vc_trans is not None:
                 init_shape = hidden_states.shape
@@ -407,8 +402,8 @@ class FlatQuantPixArtAttention(nn.Module):
         
         return hidden_states
     
-    def reparameterize(self):
-        if self.ln_trans is not None:
+    def reparametrize(self):
+        if self.l_trans is not None:
             self.ln_trans.to_eval_mode()
         if self.kc_trans is not None:
             self.kc_trans.to_eval_mode()
@@ -470,11 +465,7 @@ def apply_flatquant_to_pixart(args, model):
         model.transformer_blocks[layer_i].ff = FlatQuantPixArtFeedForward(
             args, model.transformer_blocks[layer_i].ff
         )
-        model.transformer_blocks[layer_i].attn1 = FlatQuantPixArtAttention(
+        model.transformer_blocks[layer_i].attn1 = FlatQuantPixArtSelfAttention(
             args, model.transformer_blocks[layer_i].attn1
         )
-        model.transformer_blocks[layer_i].attn2 = FlatQuantPixArtAttention(
-            args, model.transformer_blocks[layer_i].attn2
-        )
-        
     return model

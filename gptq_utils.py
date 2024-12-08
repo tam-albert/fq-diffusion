@@ -319,7 +319,7 @@ def rtn_fwrd(model, dev, args):
     TODO: Make this function general to support both OPT and LLaMA models
     """
     assert args.w_groupsize == -1, "Groupsize not supported in RTN!"
-    layers = model.model.layers
+    layers = model.transformer_blocks
     torch.cuda.empty_cache()
 
     quantizers = {}

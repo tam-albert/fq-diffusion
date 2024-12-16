@@ -34,7 +34,7 @@ def reparameterize_model(model, is_pixart = False):
             layer = model.transformer_blocks[idx]
             layer.attn1.reparameterize()
             layer.attn2.reparameterize()
-            layer.ff.reparameterize()
+            #layer.ff.reparameterize()
             # fuse per-channel scaling to layernorm
             # if layer.attn1.ln_trans is not None and layer.attn1.ln_trans.add_diag:
             #     reparameterize_ln(layer.input_layernorm, layer.attn1.ln_trans)
@@ -85,6 +85,7 @@ def save_parametrized_checkpoint(model, args, is_pixart = True):
 def load_flat_parameters(args, model, path=None, is_pixart = True):
     if is_pixart:
         if path is None:
+            print(str(os.path.join(args.exp_dir, f"flat_parameters.pth")))
             flat_parameters = torch.load(os.path.join(args.exp_dir, f"flat_parameters.pth"))
         else:
             flat_parameters = torch.load(os.path.join(path, f"flat_parameters.pth"))
@@ -112,9 +113,9 @@ def save_flat_matrices(args, model, is_pixart = False):
     if is_pixart:
         for i in range(len(model.transformer_blocks)):
             layer = model.transformer_blocks[i]
-            layer.attn1.rep_matrix_only()
-            layer.attn2.rep_matrix_only()
-            layer.ff.rep_matrix_only()
+            #layer.attn1.rep_matrix_only()
+            #layer.attn2.rep_matrix_only()
+            #layer.ff.rep_matrix_only()
             paras_name = [
                 "trans.matrix",
                 "trans.diag_scale",
@@ -158,9 +159,13 @@ def load_flat_matrices(args, model, path=None, is_pixart = False):
         layers = model.transformer_blocks
         for i in range(len(flat_parameters.keys())):
             flat_param = flat_parameters[i]
-            layers[i].attn1.rep_matrix_only()
-            layers[i].attn2.rep_matrix_only()
-            layers[i].ff.rep_matrix_only()
+            print("WE ARE GETTING INTO LOAD FLAT MATRICES")
+            #print(f"ATTN1 ORI MODE IS {layers[i].attn1._ori_mode}")
+            #print(f"ATTN1 ORI MODE IS {layers[i].attn1._ori_mode}")
+
+            #layers[i].attn1.rep_matrix_only()
+            #layers[i].attn2.rep_matrix_only()
+            #layers[i].ff.rep_matrix_only()
             layers[i].load_state_dict(flat_param, strict=False)
         return model
 

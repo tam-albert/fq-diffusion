@@ -93,6 +93,7 @@ def get_opt(model_name):
 
 
 def get_pixart(model_name):
+    print(model_name)
     skip_initialization()
 
     pipe = diffusers.PixArtSigmaPipeline.from_pretrained(

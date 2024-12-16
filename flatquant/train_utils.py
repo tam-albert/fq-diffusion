@@ -47,16 +47,19 @@ def prepare_calibration_data(args, pipe, data) -> list[dict[str, torch.Tensor]]:
         prompt_latents.append(latents)
 
         prompt_embeds, prompt_attention_mask, *_ = pipe.encode_prompt(prompt)
+        print(f"THE PROMPT LATENTS BEFORE PIPE HAVE LENGTH {len(prompt_latents)}")
 
         pipe(
             prompt_embeds=prompt_embeds,
             prompt_attention_mask=prompt_attention_mask,
             num_inference_steps=args.cali_timesteps,
-            guidance_scale=0.0,
+            guidance_scale=4.5,
             latents=latents,
             output_type="latent",
             callback=callback,
         )
+
+        print(f"THE PROMPT LATENTS AFTER PIPE HAVE LENGTH {len(prompt_latents)}")
 
         # we don't need the fully denoised image (output) for calibration
         # this also ensures that the _inputs_ are lined up with the correct timesteps
@@ -74,6 +77,28 @@ def prepare_calibration_data(args, pipe, data) -> list[dict[str, torch.Tensor]]:
 
     return calibration_data
 
+
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0.0):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best_value = None
+        self.counter = 0
+        self.stop = False
+
+    def __call__(self, current_value):
+        if self.best_value is None: # initialize to current value if first epoch
+            self.best_value = current_value
+            return
+        if current_value < (self.best_value - self.min_delta):
+            self.best_value = current_value
+            self.counter = 0
+        else: 
+            self.counter += 1
+            print(f"No improvement for {self.counter}/{self.patience} epochs")
+            if self.counter >= self.patience:
+                print("Stopping training")
+                self.stop = True
 
 def cali_flat_quant(args, pipe, calibration_data, dev, logger):
     # check trainable parameters
@@ -133,7 +158,7 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
                         prompt_embeds=prompt_emb,
                         prompt_attention_mask=prompt_attention_mask,
                         num_inference_steps=1,
-                        guidance_scale=0.0,
+                        guidance_scale=4.5,
                         latents=latent,
                         timestep=timestep,
                         output_type="latent",
@@ -158,8 +183,8 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
     peak = torch.cuda.max_memory_allocated() / 1024**2
     print(f"Current GPU memory: {current:.2f}MB, Peak: {peak:.2f}MB")
 
-    pipe.text_encoder = None
-    pipe.vae = None
+    # pipe.text_encoder = None
+    # pipe.vae = None
     pipe.to("cpu")
 
     current = torch.cuda.memory_allocated() / 1024**2
@@ -173,10 +198,10 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
 
     # begin training each block
     flat_parameters = {}
-
+    
     for i, block in enumerate(blocks):
         # can change this to loop over just first block to make testing faster
-        if i == 0:
+        if i > -1:
             logger.info(f"========= Block {i} =========")
             current = torch.cuda.memory_allocated() / 1024**2
             peak = torch.cuda.max_memory_allocated() / 1024**2
@@ -238,8 +263,8 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
             param_configs = {
                 "cali_trans": {"name": "trans.linear", "lr_multiplier": 1},
                 "add_diag": {"name": "trans.diag_scale", "lr_multiplier": 1},
-                "lwc": {"name": "clip_factor_w", "lr_multiplier": 10},
-                "lac": {"name": "clip_factor_a", "lr_multiplier": 10},
+                "lwc": {"name": "clip_factor_w", "lr_multiplier": 3},
+                "lac": {"name": "clip_factor_a", "lr_multiplier": 3},
             }
 
             trained_params = []
@@ -275,6 +300,11 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
                 scheduler = scheduler_main
             # check_params_grad(layer)
             # set_quantizer_state(layer, False)
+
+            early_stopper = EarlyStopping(args.patience)
+
+
+
             for epoch in range(args.epochs):
                 #current = torch.cuda.memory_allocated() / 1024**2
                 #print(f"GPU memory at start of epoch {epoch}: {current:.2f}MB")
@@ -313,6 +343,11 @@ def cali_flat_quant(args, pipe, calibration_data, dev, logger):
                 logger.info(
                     f"block {i} lwc lac iter {epoch}, lr {cur_lr:.8f}  time {time.time() - start_tick:.6f}s, mse: {mse:.8f}"
                 )
+
+                early_stopper(mse)
+                if early_stopper.stop:
+                    logger.info("=============Early stopping============")
+                    break
 
             fp_inps, fp_outs = fp_outs, fp_inps
             blocks[i] = block.to("cpu")

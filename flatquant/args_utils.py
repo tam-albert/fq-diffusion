@@ -78,6 +78,14 @@ def parser_gen():
         default=16,
         help="Number of bits for weights of the linear layers.",
     )
+
+    parser.add_argument(
+        "--w_cross_bits",
+        type=int,
+        default=-1,
+        help="Number of bits for V-cache quantization for cross attention.",
+    )
+
     parser.add_argument(
         "--w_groupsize",
         type=int,
@@ -114,6 +122,9 @@ def parser_gen():
     )
 
     # FlatQuant calibration Arguments
+    parser.add_argument(
+        "--patience", type=int, default=2, help="Patience of early stopper"
+    )
     parser.add_argument(
         "--epochs", type=int, default=15, help="Number of training epochs."
     )
@@ -257,6 +268,16 @@ def parser_gen():
         help="""Number of bits for K-cache quantization.
                         Note that quantizing the K-cache needs another rotation for the keys/queries.""",
     )
+
+    parser.add_argument(
+        "--k_cross_bits",
+        type=int,
+        default=-1,
+        help="""Number of bits for K quantization in cross attention.
+                        Note that quantizing the K-cache needs another rotation for the keys/queries.""",
+    )
+
+
     parser.add_argument(
         "--k_asym",
         action="store_true",
@@ -276,6 +297,14 @@ def parser_gen():
         default=16,
         help="Number of bits for V-cache quantization.",
     )
+
+    parser.add_argument(
+        "--v_cross_bits",
+        type=int,
+        default=-1,
+        help="Number of bits for V-cache quantization for cross attention.",
+    )
+
     parser.add_argument(
         "--v_asym",
         action="store_true",
@@ -290,34 +319,34 @@ def parser_gen():
     )
     parser.add_argument("--exp_name", type=str, default="exp", help="Experiment name.")
 
-    # LM Eval Arguments
+    # Eval Arguments
     parser.add_argument(
-        "--lm_eval", action="store_true", help="Evaluate the model on LM Eval tasks."
+        "--eval", action="store_true", help="Evaluate the model on calibration dataset."
     )
-    parser.add_argument(
-        "--tasks",
-        nargs="+",
-        default=[
-            "piqa",
-            "hellaswag",
-            "arc_easy",
-            "arc_challenge",
-            "winogrande",
-            "lambada_openai",
-        ],
-        help="Tasks to evaluate on LM Eval.",
-    )
-    parser.add_argument(
-        "--lm_eval_batch_size",
-        type=int,
-        default=128,
-        help="Batch size for evaluation with lm eval harness.",
-    )
-    parser.add_argument(
-        "--distribute_model",
-        action="store_true",
-        help="Distribute the model across multiple GPUs for evaluation.",
-    )
+    # parser.add_argument(
+    #     "--tasks",
+    #     nargs="+",
+    #     default=[
+    #         "piqa",
+    #         "hellaswag",
+    #         "arc_easy",
+    #         "arc_challenge",
+    #         "winogrande",
+    #         "lambada_openai",
+    #     ],
+    #     help="Tasks to evaluate on LM Eval.",
+    # )
+    # parser.add_argument(
+    #     "--lm_eval_batch_size",
+    #     type=int,
+    #     default=128,
+    #     help="Batch size for evaluation with lm eval harness.",
+    # )
+    # parser.add_argument(
+    #     "--distribute_model",
+    #     action="store_true",
+    #     help="Distribute the model across multiple GPUs for evaluation.",
+    # )
 
     args = parser.parse_args()
     if args.a_groupsize > -1:

@@ -11,6 +11,9 @@ import torch
 from transformers import AutoModel, AutoTokenizer
 from diffusers import PixArtAlphaPipeline
 
+from torchmetrics.image.fid import FrechetInceptionDistance
+from pytorch_fid import fid_score
+
 def get_detailed_model_size(model):
     total_params = 0
     trainable_params = 0
@@ -53,20 +56,24 @@ def main():
     )
 
     
-
+    #pipe.transformer = apply_flatquant_to_model(args, pipe.transformer)
+    logger.info("Finished applying FlatQuant to model.")
+    
     if args.quantize:
         # 1. prepare calibration data
-        if args.cali_trans or args.add_diag or args.lwc or args.lac:
+        if args.eval or args.cali_trans or args.add_diag or args.lwc or args.lac:
             calibration_data = train_utils.prepare_calibration_data(args, pipe, data)
             logger.info("Finished preparing calibration data.")
         
         # 2. replace linear/attention layers with special FlatQuant layers
-        pipe.transformer = apply_flatquant_to_model(args, pipe.transformer)
+        pipe.transformer = apply_flatquant_to_model(args, pipe.transformer, shared = True)
         logger.info("Finished applying FlatQuant to model.")
 
         if args.resume:
+            print("testing did it get here?")
             flat_utils.load_flat_parameters(args, model, is_pixart = True)
-        elif args.reload_matrix:
+        if args.reload_matrix:
+            print("testing did it get to flat matrices?")
             flat_utils.load_flat_matrices(args, model, path=args.matrix_path, is_pixart = True)
         elif args.cali_trans or args.add_diag or args.lwc or args.lac:
             # 2. calibrate FlatQuant layers (learn affine transforms)
@@ -77,55 +84,72 @@ def main():
         if args.save_matrix and not args.reload_matrix:
             flat_utils.save_flat_matrices(args, model, is_pixart = True)
             print("Finished saving the model")
-        flat_utils.reparameterize_model(model.to('cuda'), is_pixart = True)
-        logger.info("Finished reparameterize model.")
-
+        #flat_utils.reparameterize_model(model.to('cuda'), is_pixart = True)
+        #logger.info("Finished reparameterize model.")
+    
+        
+    
     # 3. actually quantize the weights
-    if args.w_bits < 16:
-        save_dict = {}
-        quantizers = gptq_utils.rtn_fwrd(model, utils.DEV, args)
-        save_dict["w_quantizers"] = quantizers
-        logger.info("Finished quantizing weights.")
+    # SAMPLE INFERENCE
 
+    # input_text = "medium rare steak tenderloin super tasty photo"
+    # input_text = "a dragon soaring through the skies, above mountainous terrain"
+    input_text = "a dragon soaring through the skies, above mountainous terrain"
+    utils.seed_everything(seed=args.seed)
     with torch.no_grad():
-        input_text = "Luffy from ONEPIECE, handsome face, fantasy"
+        print(f"Input text: {input_text}")
         pipe.to('cuda')
-        print(pipe(input_text))
+        generated_image_path = "generated_image_trained_quant_w4a8.png"
+        print(f"Saving generated image at {generated_image_path}.")
+        output = pipe(input_text)
+        output.images[0].save(generated_image_path, format="PNG")
+        print("Image has been saved!")
+
     return
 
-    # eval stuff below for later:
 
-    fid = FrechetInceptionDistance(feature=2048) 
+    """
+    EVAL CODE
+    """
 
-    transform = transforms.Compose([
-        transforms.Resize((299, 299)),  # Inception expects 299x299
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    def compute_fid_score(generated_image_path, target_image_path):
 
-    def load_and_process_image(image_path):
-        image = default_loader(image_path)  
-        return transform(image).unsqueeze(0) 
+        fid = FrechetInceptionDistance(feature=2048) 
 
-    generated_image = load_and_process_image(generated_image_path)
-    target_image = load_and_process_image(target_image_path)
+        transform = transforms.Compose([
+            transforms.Resize((299, 299)),  # Inception expects 299x299
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    fid = fid.to(device)
-    generated_image = generated_image.to(device)
-    target_image = target_image.to(device)
+        def load_and_process_image(image_path):
+            image = default_loader(image_path)  
+            return transform(image).unsqueeze(0) 
 
-    fid.update(generated_image, real=False)  
-    fid.update(target_image, real=True)    
+        generated_image = load_and_process_image(generated_image_path)
+        target_image = load_and_process_image(target_image_path)
 
-    fid_score = fid.compute()
-    print(f"FID Score: {fid_score.item()}")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        fid = fid.to(device)
+        generated_image = generated_image.to(device)
+        target_image = target_image.to(device)
+
+        fid.update(generated_image, real=False)  
+        fid.update(target_image, real=True)    
+
+        fid_score = fid.compute()
+        return fid_score
+
+    if args.eval:
+        print(f"Running evaluations for {args.model} w{args.w_bits}a{args.a_bits}, k{args.k_bits}v{args.v_bits} quantization.")
+    print(calibration_data) 
     
     # if args.distribute_model:
     #     utils.distribute_model(model)text_encoder.to(device)
     # else:
     #     model.to(utils.DEV)
 
+    """
     # Evaluating PPL
     for eval_dataset in ["wikitext2", "c4"]:
         logger.info(eval_dataset)
@@ -172,6 +196,7 @@ def main():
             sum(metric_vals.values()) / len(metric_vals.values()), 2
         )
         logger.info(metric_vals)
+    """
 
 
 if __name__ == "__main__":

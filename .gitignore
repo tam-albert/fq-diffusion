@@ -15,3 +15,5 @@ Makefile
 modelzoo/*
 outputs/*
 third-party/*
+**/mjhq_dataset/**
+mjhq30k_imgs.zip
